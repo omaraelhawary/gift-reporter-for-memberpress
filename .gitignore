@@ -42,3 +42,4 @@ access_log
 *.zip
 build/
 dist/
+svn-export/

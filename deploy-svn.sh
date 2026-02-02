@@ -79,6 +79,7 @@ RSYNC_EXCLUDES=(
 	--exclude='README.md'
 	--exclude='svn-export/'
 	--exclude='deploy-svn.sh'
+	--exclude='SVN-DEPLOY.md'
 )
 
 echo -e "${GREEN}Preparing WordPress.org SVN package (Stable tag: ${VERSION})...${NC}"
