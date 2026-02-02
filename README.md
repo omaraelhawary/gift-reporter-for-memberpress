@@ -4,6 +4,8 @@
 
 A comprehensive WordPress plugin that generates detailed reports for the MemberPress Gifting add-on, showing the linkage between gift givers and recipients. This plugin provides advanced filtering, CSV export capabilities, automated reminder emails, and a modern admin interface.
 
+**Plugin page:** [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/)
+
 ## 📸 Screenshots
 
 ### Admin Dashboard
@@ -13,6 +15,7 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 
 ## Plugin Information
 
+- **Plugin page:** [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/)
 - **Version:** 1.6.2
 - **Requires at least:** WordPress 5.0
 - **Tested up to:** WordPress 6.9
