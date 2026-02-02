@@ -59,7 +59,11 @@ Apply filters on the Gift Report tab, then click **Download CSV Report**. Only f
 
 == Support ==
 
-Email: omaraelhawary@gmail.com
+If you need plugin support from us, you can visit our [support page](https://wordpress.org/support/plugin/memberpress-gift-reporter/).
+
+== Plugin Development ==
+
+If you're a theme author, plugin author, or just a code hobbyist, you can follow the development of this plugin on its [GitHub repository](https://github.com/omaraelhawary/gift-reporter-for-memberpress).
 
 == Rate us ==
 

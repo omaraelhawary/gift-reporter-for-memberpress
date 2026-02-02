@@ -60,6 +60,7 @@ class MPGR_Admin {
 	public function add_plugin_links( $links ) {
 		$plugin_links = array(
 			'<a href="' . esc_url( admin_url( 'admin.php?page=memberpress-gift-report' ) ) . '">' . esc_html__( 'View Report', 'memberpress-gift-reporter' ) . '</a>',
+			'<a href="' . esc_url( 'https://wordpress.org/plugins/memberpress-gift-reporter/' ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Plugin page', 'memberpress-gift-reporter' ) . '</a>',
 		);
 		return array_merge( $plugin_links, $links );
 	}

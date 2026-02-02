@@ -4,6 +4,13 @@
 
 A comprehensive WordPress plugin that generates detailed reports for the MemberPress Gifting add-on, showing the linkage between gift givers and recipients. This plugin provides advanced filtering, CSV export capabilities, automated reminder emails, and a modern admin interface.
 
+## 📸 Screenshots
+
+### Admin Dashboard
+![MemberPress Gift Report Dashboard](screenshots/dashboard.png)
+
+*The MemberPress Gift Report dashboard showing advanced filtering options, summary statistics, and detailed gift transaction data with export functionality.*
+
 ## Plugin Information
 
 - **Version:** 1.6.2
@@ -21,156 +28,6 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 - MemberPress plugin (active)
 - MemberPress Gifting add-on (active)
 - MySQL 5.7+ or MariaDB 10.2+
-
-## 📝 Changelog
-
-### Version 1.6.2 (2026-01-10)
-
-#### 🔧 Technical Updates
-- Updated tested WordPress version to 6.9
-- Improved plugin header documentation
-
-### Version 1.6.1 (2026-01-02)
-
-#### 🐛 Bug Fixes
-- **Fixed Gift Checkout Links**: Fixed issue where gift redemption links were using hardcoded `/memberpress-checkout/` path instead of actual product URLs
-- **Improved Link Generation**: Redemption links now use the product's actual URL (matching MemberPress Gifting plugin behavior) with coupon parameter appended
-- **Better Compatibility**: Links now work correctly regardless of custom checkout page configurations or permalink structures
-
-#### 🔧 Technical Updates
-- Added `generate_redemption_url()` helper function to properly generate gift redemption URLs using product URLs
-- Updated all redemption link generation to use product URL method instead of hardcoded paths
-- Improved fallback handling for cases where MemberPress classes aren't available
-
-### Version 1.6.0 (2025-11-10)
-
-#### 🎉 New Features
-- **Weekly Summary Emails**: New automated weekly summary email feature that sends administrators a comprehensive overview of gift activity
-- **Weekly Cron Schedule**: Added custom weekly cron schedule support for automated weekly reports
-- **Gift Activity Overview**: Weekly summaries include total gifts, claimed/unclaimed statistics, revenue data, and top products
-- **Configurable Weekly Reports**: Enable/disable weekly summary emails with customizable settings
-
-#### 🎨 Improvements
-- **Enhanced Cron Management**: Improved cron job scheduling and cleanup for both daily reminders and weekly summaries
-- **Better Plugin Architecture**: Added support for multiple scheduled tasks with proper initialization and cleanup
-
-#### 🔧 Technical Updates
-- Added `MPGR_Weekly_Summary` class for weekly email functionality
-- Implemented weekly cron schedule registration via `cron_schedules` filter
-- Enhanced plugin activation/deactivation hooks to manage weekly summary cron jobs
-- Improved cron hook registration and cleanup processes
-
-### Version 1.5.2 (2025-11-06)
-
-#### 🐛 Bug Fixes
-- Fixed reminder scheduling issues and improved reliability
-- Enhanced reminder email delivery tracking
-- Improved cron job management for reminder system
-- Fixed edge cases in reminder schedule processing
-
-### Version 1.5.1 (2025-11-04)
-
-#### 🐛 Bug Fixes
-- Fixed various bugs and issues from version 1.5.0
-- Improved stability and performance
-
-### Version 1.5.0 (2025-11-04)
-
-#### 🎉 New Features
-- **Daily Cron Schedule**: Changed reminder cron schedule from hourly to daily for better performance
-- **Orphaned Hook Cleanup**: Automatic cleanup of old/orphaned cron hooks on plugin load
-
-#### 🎨 Improvements
-- **Better UI Layout**: Fixed checkbox alignment with description text in reminder settings
-- **Code Cleanup**: Removed debug code and console.log statements from production code
-
-#### 🔧 Technical Updates
-- Updated cron schedule from hourly to daily for reminder processing
-- Added automatic cleanup for orphaned cron hooks (`mpgr_send_reminders`, `mpgr_check_reminders`, `mpgr_send_reminder_emails`)
-- Improved code quality by removing debug statements and comments
-- Enhanced initialization process to clean up old hooks on every load
-
-### Version 1.4.1 (2025-11-03)
-
-#### 🎉 New Features
-- **Email Template Override Support**: Customers can now override the reminder email template by placing a custom template in their theme directory
-- **Template System**: New template rendering system with theme override capability following WordPress standards
-
-#### 🎨 Improvements
-- **Customizable Emails**: Easy customization of reminder email content, styling, and layout
-- **Theme Integration**: Seamless integration with child themes and parent themes
-- **Developer Friendly**: Template override system with clear documentation and examples
-
-#### 🔧 Technical Updates
-- Refactored email sending methods to use template system
-- Added template location methods with theme override support
-- Created default email template file in `views/emails/reminder-email.php`
-- Enhanced documentation with template override instructions
-
-### Version 1.4.0 (2025-11-03)
-
-#### 🎉 New Features
-- **Bulk Resend Gift Emails**: New bulk action to send reminder emails to multiple unclaimed gifts at once
-- **Select All Unclaimed**: Quick selection feature to easily select all unclaimed gifts for bulk operations
-- **Batch Processing**: Smart batch processing for bulk email sending with progress tracking
-
-#### 🎨 Improvements
-- **Enhanced Bulk Operations**: Improved UI for managing multiple gift emails simultaneously
-- **Better User Experience**: Streamlined workflow for sending reminder emails to gifters
-- **Progress Feedback**: Clear feedback on bulk operations with success/failure counts
-
-#### 🔧 Technical Updates
-- Added bulk email handler with rate limiting and error handling
-- Implemented checkbox selection system for bulk actions
-- Enhanced email validation and delivery tracking
-- Improved database queries for better performance on bulk operations
-
-### Version 1.3.0 (2025-10-30)
-
-#### 🎉 New Features
-- **Resend Gift Email**: New action button to resend the gift email to the gifter with redemption link
-- **Copy Redemption Link**: New action button to copy the redemption link directly to clipboard
-- **Actions Column**: Added dedicated actions column in the report table with visual feedback
-
-#### 🎨 Improvements
-- **Enhanced User Experience**: Action buttons with tooltips, loading states, and success animations
-- **Quick Customer Support**: Easily resend gift information when customers lose their original email
-- **Manual Follow-ups**: Copy redemption links for manual outreach via email, chat, or phone
-
-#### 🔧 Technical Updates
-- Added action buttons UI with responsive design and accessibility features
-- Implemented clipboard API with fallback support for older browsers
-- Enhanced CSS with button animations and visual states (loading, success, hover)
-
-### Version 1.2.0 (2025-10-29)
-
-#### 🎉 New Features
-- **Transaction ID Filter**: Search and filter by gift purchase transaction ID
-- **Claim Transaction ID Filter**: Search and filter by gift redemption/claim transaction ID
-
-#### 🎨 Improvements
-- **Enhanced Summary Display**: Redesigned summary statistics with improved inline layout for better readability
-- **Increased Filter Count**: Now featuring 10 powerful filters (up from 8) for even more precise data analysis
-
-#### 🔧 Technical Updates
-- Updated filter validation and sanitization for new transaction ID fields
-- Enhanced JavaScript filtering logic to support transaction ID searches
-- Improved data query system to handle transaction number lookups
-
-### Version 1.1.0
-- Advanced filtering system with 8 filters
-- Date range filtering for purchases and redemptions
-- Email filtering for gifters and recipients
-- Product/membership filtering
-- Gift status filtering
-- Filtered CSV exports
-- Modern admin interface
-
-### Version 1.0.0
-- Initial release
-- Basic gift reporting functionality
-- CSV export capability
-- REST API endpoints
 
 ## 🎁 Features
 
@@ -201,21 +58,6 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 - **Modern Admin Interface**: Clean, responsive, and user-friendly dashboard with tabbed navigation
 - **Mobile Optimized**: Touch-friendly interface for all devices
 - **Security**: Admin-only access with proper permissions
-
-## 📸 Screenshots
-
-### Admin Dashboard
-![MemberPress Gift Report Dashboard](screenshots/dashboard.png)
-
-*The MemberPress Gift Report dashboard showing advanced filtering options, summary statistics, and detailed gift transaction data with export functionality.*
-
-## 📋 Requirements
-
-- WordPress 5.0 or higher
-- PHP 7.4 or higher
-- MemberPress plugin (active)
-- MemberPress Gifting add-on (active)
-- MySQL 5.7+ or MariaDB 10.2+
 
 ## 🚀 Installation
 
@@ -448,6 +290,20 @@ This plugin is licensed under the GPL v2 or later.
 ## 📞 Contact
 
 - **Email**: omaraelhawary@gmail.com
+
+## Changelog
+
+Recent versions (full history in [readme.txt](readme.txt) or on [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/#developers)):
+
+- **1.6.2** — Tested up to WordPress 6.9; plugin header updates
+- **1.6.1** — Fixed gift redemption links (use product URLs instead of hardcoded path)
+- **1.6.0** — Weekly summary emails, configurable schedules, improved cron handling
+- **1.5.x** — Daily reminder cron, orphaned hook cleanup, UI fixes
+- **1.4.x** — Bulk resend emails, email template overrides
+- **1.3.0** — Resend gift email and copy redemption link actions
+- **1.2.0** — Transaction ID filters, 10 filters total
+- **1.1.0** — Advanced filtering, date/email/product filters, CSV export
+- **1.0.0** — Initial release (gift reports, CSV export, REST API)
 
 ---
 
