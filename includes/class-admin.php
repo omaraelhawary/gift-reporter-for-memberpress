@@ -105,20 +105,31 @@ class MPGR_Admin {
 			return;
 		}
 
-		// Verify nonce for filter requests (only when filters are being applied)
-		if (!empty($_GET['date_from']) || !empty($_GET['date_to']) || !empty($_GET['gift_status']) || 
-			!empty($_GET['product']) || !empty($_GET['gifter_email']) || !empty($_GET['recipient_email']) ||
-			!empty($_GET['redemption_from']) || !empty($_GET['redemption_to']) || 
-			!empty($_GET['transaction_id']) || !empty($_GET['claim_transaction_id'])) {
-			
-			$nonce = isset($_GET['_wpnonce']) ? sanitize_text_field(wp_unslash($_GET['_wpnonce'])) : '';
-			if (!wp_verify_nonce($nonce, 'mpgr_filter_nonce')) {
-				wp_die(esc_html__('Security check failed. Please try again.', 'memberpress-gift-reporter'));
-			}
+		// Get current tab (safe to access without nonce as it's just for display)
+		$current_tab = isset( $_GET['tab'] ) ? sanitize_text_field( wp_unslash( $_GET['tab'] ) ) : 'report';
+
+		// Check if any filter parameters are present (for report tab only)
+		$has_filter_params = false;
+		if ( 'report' === $current_tab ) {
+			$has_filter_params = ! empty( $_GET['date_from'] ) || 
+			                     ! empty( $_GET['date_to'] ) || 
+			                     ! empty( $_GET['gift_status'] ) || 
+			                     ! empty( $_GET['product'] ) || 
+			                     ! empty( $_GET['gifter_email'] ) || 
+			                     ! empty( $_GET['recipient_email'] ) ||
+			                     ! empty( $_GET['redemption_from'] ) || 
+			                     ! empty( $_GET['redemption_to'] ) || 
+			                     ! empty( $_GET['transaction_id'] ) || 
+			                     ! empty( $_GET['claim_transaction_id'] );
 		}
 
-		// Get current tab
-		$current_tab = isset( $_GET['tab'] ) ? sanitize_text_field( wp_unslash( $_GET['tab'] ) ) : 'report';
+		// Verify nonce for filter requests (must be done before processing any filter parameters)
+		if ( $has_filter_params ) {
+			$nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
+			if ( ! wp_verify_nonce( $nonce, 'mpgr_filter_nonce' ) ) {
+				wp_die( esc_html__( 'Security check failed. Please try again.', 'memberpress-gift-reporter' ) );
+			}
+		}
 
 		// Display tabs
 		$this->display_tabs( $current_tab );
@@ -127,37 +138,37 @@ class MPGR_Admin {
 		if ( 'reminders' === $current_tab ) {
 			$this->display_reminder_settings_tab();
 		} else {
-			// Get filter parameters for report tab
+			// Get filter parameters for report tab (only after nonce verification)
 			$filters = array();
-			if (!empty($_GET['date_from'])) {
-				$filters['date_from'] = sanitize_text_field(wp_unslash($_GET['date_from']));
+			if ( ! empty( $_GET['date_from'] ) ) {
+				$filters['date_from'] = sanitize_text_field( wp_unslash( $_GET['date_from'] ) );
 			}
-			if (!empty($_GET['date_to'])) {
-				$filters['date_to'] = sanitize_text_field(wp_unslash($_GET['date_to']));
+			if ( ! empty( $_GET['date_to'] ) ) {
+				$filters['date_to'] = sanitize_text_field( wp_unslash( $_GET['date_to'] ) );
 			}
-			if (!empty($_GET['gift_status'])) {
-				$filters['gift_status'] = sanitize_text_field(wp_unslash($_GET['gift_status']));
+			if ( ! empty( $_GET['gift_status'] ) ) {
+				$filters['gift_status'] = sanitize_text_field( wp_unslash( $_GET['gift_status'] ) );
 			}
-			if (!empty($_GET['product'])) {
-				$filters['product'] = intval($_GET['product']);
+			if ( ! empty( $_GET['product'] ) ) {
+				$filters['product'] = intval( $_GET['product'] );
 			}
-			if (!empty($_GET['gifter_email'])) {
-				$filters['gifter_email'] = sanitize_email(wp_unslash($_GET['gifter_email']));
+			if ( ! empty( $_GET['gifter_email'] ) ) {
+				$filters['gifter_email'] = sanitize_email( wp_unslash( $_GET['gifter_email'] ) );
 			}
-			if (!empty($_GET['recipient_email'])) {
-				$filters['recipient_email'] = sanitize_email(wp_unslash($_GET['recipient_email']));
+			if ( ! empty( $_GET['recipient_email'] ) ) {
+				$filters['recipient_email'] = sanitize_email( wp_unslash( $_GET['recipient_email'] ) );
 			}
-			if (!empty($_GET['redemption_from'])) {
-				$filters['redemption_from'] = sanitize_text_field(wp_unslash($_GET['redemption_from']));
+			if ( ! empty( $_GET['redemption_from'] ) ) {
+				$filters['redemption_from'] = sanitize_text_field( wp_unslash( $_GET['redemption_from'] ) );
 			}
-			if (!empty($_GET['redemption_to'])) {
-				$filters['redemption_to'] = sanitize_text_field(wp_unslash($_GET['redemption_to']));
+			if ( ! empty( $_GET['redemption_to'] ) ) {
+				$filters['redemption_to'] = sanitize_text_field( wp_unslash( $_GET['redemption_to'] ) );
 			}
-			if (!empty($_GET['transaction_id'])) {
-				$filters['transaction_id'] = sanitize_text_field(wp_unslash($_GET['transaction_id']));
+			if ( ! empty( $_GET['transaction_id'] ) ) {
+				$filters['transaction_id'] = sanitize_text_field( wp_unslash( $_GET['transaction_id'] ) );
 			}
-			if (!empty($_GET['claim_transaction_id'])) {
-				$filters['claim_transaction_id'] = sanitize_text_field(wp_unslash($_GET['claim_transaction_id']));
+			if ( ! empty( $_GET['claim_transaction_id'] ) ) {
+				$filters['claim_transaction_id'] = sanitize_text_field( wp_unslash( $_GET['claim_transaction_id'] ) );
 			}
 
 			// Display report.
@@ -247,18 +258,44 @@ class MPGR_Admin {
 			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Array values are sanitized individually in the loop below
 			$raw_schedules = wp_unslash( $_POST['mpgr_reminder_schedules'] );
 			foreach ( $raw_schedules as $schedule ) {
-				// Backward compatibility: check for old delay_days format
-				if ( isset( $schedule['delay_days'] ) && $schedule['delay_days'] !== '' ) {
-					$delay_value = absint( $schedule['delay_days'] );
-					$delay_unit = 'days';
-				} elseif ( isset( $schedule['delay_value'] ) && $schedule['delay_value'] !== '' ) {
-					$delay_value = absint( $schedule['delay_value'] );
-					$delay_unit = isset( $schedule['delay_unit'] ) && in_array( $schedule['delay_unit'], array( 'hours', 'days' ), true ) ? $schedule['delay_unit'] : 'days';
-				} else {
+				// Ensure schedule is an array
+				if ( ! is_array( $schedule ) ) {
 					continue;
 				}
-				
-				// Validate based on unit
+
+				$delay_value = null;
+				$delay_unit = 'days';
+
+				// Backward compatibility: check for old delay_days format
+				if ( isset( $schedule['delay_days'] ) && $schedule['delay_days'] !== '' ) {
+					// Sanitize and validate delay_days
+					$delay_days_raw = sanitize_text_field( $schedule['delay_days'] );
+					if ( is_numeric( $delay_days_raw ) ) {
+						$delay_value = absint( $delay_days_raw );
+						$delay_unit = 'days';
+					}
+				} elseif ( isset( $schedule['delay_value'] ) && $schedule['delay_value'] !== '' ) {
+					// Sanitize and validate delay_value
+					$delay_value_raw = sanitize_text_field( $schedule['delay_value'] );
+					if ( is_numeric( $delay_value_raw ) ) {
+						$delay_value = absint( $delay_value_raw );
+					}
+
+					// Sanitize and validate delay_unit - only allow 'hours' or 'days'
+					if ( isset( $schedule['delay_unit'] ) ) {
+						$delay_unit_raw = sanitize_text_field( $schedule['delay_unit'] );
+						if ( in_array( $delay_unit_raw, array( 'hours', 'days' ), true ) ) {
+							$delay_unit = $delay_unit_raw;
+						}
+					}
+				}
+
+				// Skip if delay_value is not set or invalid
+				if ( null === $delay_value ) {
+					continue;
+				}
+
+				// Validate based on unit with proper range checks
 				$max_value = ( $delay_unit === 'hours' ) ? 8760 : 365; // 8760 hours = 365 days
 				if ( $delay_value >= 0 && $delay_value <= $max_value ) {
 					$reminder_schedules[] = array(
@@ -351,6 +388,17 @@ class MPGR_Admin {
 			MPGR_VERSION
 		);
 
+		// Enqueue report styles (use minified version if available, fallback to unminified)
+		$report_css = file_exists( MPGR_PLUGIN_PATH . 'assets/css/style.min.css' ) 
+			? MPGR_PLUGIN_URL . 'assets/css/style.min.css' 
+			: MPGR_PLUGIN_URL . 'assets/css/style.css';
+		wp_enqueue_style(
+			'mpgr-styles',
+			$report_css,
+			array(),
+			MPGR_VERSION
+		);
+
 		// Enqueue admin JS (use minified version if available, fallback to unminified)
 		$admin_js = file_exists( MPGR_PLUGIN_PATH . 'assets/js/admin.min.js' ) 
 			? MPGR_PLUGIN_URL . 'assets/js/admin.min.js' 
@@ -361,6 +409,31 @@ class MPGR_Admin {
 			array( 'jquery' ),
 			MPGR_VERSION,
 			true
+		);
+
+		// Enqueue report script (use minified version if available, fallback to unminified)
+		$report_js = file_exists( MPGR_PLUGIN_PATH . 'assets/js/script.min.js' ) 
+			? MPGR_PLUGIN_URL . 'assets/js/script.min.js' 
+			: MPGR_PLUGIN_URL . 'assets/js/script.js';
+		wp_enqueue_script(
+			'mpgr-script',
+			$report_js,
+			array( 'jquery' ),
+			MPGR_VERSION,
+			true
+		);
+
+		// Localize report script for AJAX
+		wp_localize_script(
+			'mpgr-script',
+			'mpgr_ajax',
+			array(
+				'ajax_url' => admin_url( 'admin-ajax.php' ),
+				'nonce' => wp_create_nonce( 'mpgr_export_csv' ),
+				'resend_email_nonce' => wp_create_nonce( 'mpgr_resend_gift_email' ),
+				'copy_link_nonce' => wp_create_nonce( 'mpgr_copy_redemption_link' ),
+				'bulk_resend_nonce' => wp_create_nonce( 'mpgr_bulk_resend_gift_emails' ),
+			)
 		);
 
 		// Localize script for AJAX

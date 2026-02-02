@@ -108,6 +108,10 @@ class MPGR_Gift_Report {
     /**
      * Fallback email template (used if template file doesn't exist)
      * 
+     * Note: Inline <style> tags are used here because email clients require inline styles
+     * for proper rendering. External stylesheets are not supported by most email clients.
+     * This is the standard practice for HTML emails and is different from web pages.
+     * 
      * @param array $variables Template variables
      * @return string HTML email content
      */
@@ -180,8 +184,8 @@ class MPGR_Gift_Report {
 			wp_die( esc_html__( 'Rate limit exceeded. Please wait before trying again.', 'memberpress-gift-reporter' ) );
 		}
 
-		// Get and sanitize filter parameters
-		$filters = $this->sanitize_ajax_filters($_POST);
+		// Get and sanitize filter parameters - only extract specific expected fields
+		$filters = $this->sanitize_ajax_filters();
 
 		try {
 			$this->generate_report(0, 0, $filters);
@@ -772,10 +776,15 @@ class MPGR_Gift_Report {
     
     /**
      * Sanitize AJAX filter parameters
+     * Only processes specific expected fields from $_POST, not the entire array
+     * 
+     * Note: Nonce verification is performed in the calling method (ajax_export_csv)
+     * before this method is called. All inputs are sanitized via the sanitize_function.
      */
-    private function sanitize_ajax_filters($post_data) {
+    private function sanitize_ajax_filters() {
         $filters = array();
         
+        // Define only the specific fields we expect and their sanitization functions
         $filter_fields = array(
             'date_from' => 'sanitize_text_field',
             'date_to' => 'sanitize_text_field',
@@ -789,9 +798,12 @@ class MPGR_Gift_Report {
             'redemption_to' => 'sanitize_text_field',
         );
         
-        foreach ($filter_fields as $field => $sanitize_function) {
-            if (!empty($post_data[$field])) {
-                $filters[$field] = $sanitize_function($post_data[$field]);
+        // Only extract and process the specific expected fields from $_POST
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in calling method (ajax_export_csv)
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- All inputs are sanitized via sanitize_function in the loop
+        foreach ( $filter_fields as $field => $sanitize_function ) {
+            if ( isset( $_POST[ $field ] ) && $_POST[ $field ] !== '' ) {
+                $filters[ $field ] = $sanitize_function( wp_unslash( $_POST[ $field ] ) );
             }
         }
         
@@ -1281,10 +1293,9 @@ class MPGR_Gift_Report {
         
         $summary = $this->get_summary($filters);
         
-        // Enqueue styles only on admin pages
-        if (is_admin()) {
-            wp_enqueue_style('mpgr-styles', MPGR_PLUGIN_URL . 'assets/css/style.min.css', array(), MPGR_VERSION);
-        }
+        // Styles are enqueued via admin_enqueue_scripts hook in class-admin.php
+        // Note: Inline styles in email templates (get_fallback_email_template, get_email_header, etc.)
+        // are intentional and correct - email clients require inline styles for proper rendering
         
         		echo '<div class="mpgr-gift-report">';
 		echo '<h2>🎁 ' . esc_html__( 'MemberPress Gift Report', 'memberpress-gift-reporter' ) . '</h2>';
@@ -1637,16 +1648,6 @@ class MPGR_Gift_Report {
         
         echo '</div>';
         
-        // Add JavaScript for export only on admin pages
-        if (is_admin()) {
-            wp_enqueue_script('mpgr-script', MPGR_PLUGIN_URL . 'assets/js/script.min.js', array('jquery'), MPGR_VERSION, true);
-            wp_localize_script('mpgr-script', 'mpgr_ajax', array(
-                'ajax_url' => admin_url('admin-ajax.php'),
-                'nonce' => wp_create_nonce('mpgr_export_csv'),
-                'resend_email_nonce' => wp_create_nonce('mpgr_resend_gift_email'),
-                'copy_link_nonce' => wp_create_nonce('mpgr_copy_redemption_link'),
-                'bulk_resend_nonce' => wp_create_nonce('mpgr_bulk_resend_gift_emails')
-            ));
-        }
+        // JavaScript is enqueued via admin_enqueue_scripts hook in class-admin.php
     }
 }

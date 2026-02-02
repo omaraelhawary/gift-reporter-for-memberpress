@@ -293,6 +293,10 @@ class MPGR_Weekly_Summary {
 	/**
 	 * Generate email HTML content
 	 * 
+	 * Note: Inline <style> tags are used here because email clients require inline styles
+	 * for proper rendering. External stylesheets are not supported by most email clients.
+	 * This is the standard practice for HTML emails and is different from web pages.
+	 * 
 	 * @param array $data Week data
 	 * @return string HTML email content
 	 */

@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: Gift Reporter for MemberPress
- * Plugin URI: https://github.com/omaraelhawary/gift-reporter-for-memberpress
+ * Plugin URI: https://wordpress.org/plugins/memberpress-gift-reporter/
  * Description: Generate comprehensive reports for MemberPress Gifting add-on, showing the linkage between gift givers and recipients. This is an independent plugin (not affiliated with MemberPress) developed by Omar ElHawary.
  * Version: 1.6.2
  * Author: Omar ElHawary

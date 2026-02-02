@@ -549,6 +549,10 @@ class MPGR_Reminders {
 	/**
 	 * Get email header template
 	 * 
+	 * Note: Inline <style> tags are used here because email clients require inline styles
+	 * for proper rendering. External stylesheets are not supported by most email clients.
+	 * This is the standard practice for HTML emails and is different from web pages.
+	 * 
 	 * @param array $variables Template variables
 	 * @return string Header HTML
 	 */
