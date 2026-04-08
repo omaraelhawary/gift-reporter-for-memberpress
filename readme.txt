@@ -3,7 +3,7 @@ Contributors: omarelhawary
 Tags: memberpress, gifting, reports, csv export, reminders
 Requires at least: 5.0
 Tested up to: 6.9
-Stable tag: 1.6.2
+Stable tag: 1.6.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -50,6 +50,9 @@ Use the **Reminders** tab for subject and body. To override the template, copy `
 Apply filters on the Gift Report tab, then click **Download CSV Report**. Only filtered rows are exported.
 
 == Changelog ==
+
+= 1.6.3 =
+* Fix WordPress 6.7+ notice: load translations on init; avoid translating cron schedule label before init
 
 = 1.6.2 =
 * Tested up to WordPress 6.9

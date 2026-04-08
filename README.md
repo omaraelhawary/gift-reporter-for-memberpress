@@ -16,7 +16,7 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 ## Plugin Information
 
 - **Plugin page:** [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/)
-- **Version:** 1.6.2
+- **Version:** 1.6.3
 - **Requires at least:** WordPress 5.0
 - **Tested up to:** WordPress 6.9
 - **Requires PHP:** 7.4 or higher
@@ -298,6 +298,7 @@ This plugin is licensed under the GPL v2 or later.
 
 Recent versions (full history in [readme.txt](readme.txt) or on [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/#developers)):
 
+- **1.6.3** — WordPress 6.7+ translation loading fix (no early textdomain notice)
 - **1.6.2** — Tested up to WordPress 6.9; plugin header updates
 - **1.6.1** — Fixed gift redemption links (use product URLs instead of hardcoded path)
 - **1.6.0** — Weekly summary emails, configurable schedules, improved cron handling
