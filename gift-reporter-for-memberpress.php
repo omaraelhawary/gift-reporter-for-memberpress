@@ -94,6 +94,9 @@ class MPGR_MemberPressGiftReporter {
 		// Register custom cron schedules
 		add_filter( 'cron_schedules', array( $this, 'add_weekly_cron_schedule' ) );
 
+		// Load translations at init — required for WordPress 6.7+ (avoid JIT load before init).
+		add_action( 'init', array( $this, 'load_textdomain' ), 0 );
+
 		// Check dependencies after plugins are loaded.
 		add_action( 'plugins_loaded', array( $this, 'check_dependencies' ) );
 	}
@@ -109,10 +112,22 @@ class MPGR_MemberPressGiftReporter {
 		if ( ! isset( $schedules['weekly'] ) ) {
 			$schedules['weekly'] = array(
 				'interval' => WEEK_IN_SECONDS,
-				'display'  => __( 'Once Weekly', 'memberpress-gift-reporter' ),
+				// Plain string: this filter can run before init; do not call __() here (WP 6.7+).
+				'display'  => 'Once Weekly',
 			);
 		}
 		return $schedules;
+	}
+
+	/**
+	 * Load plugin text domain (must run on init or later).
+	 */
+	public function load_textdomain() {
+		load_plugin_textdomain(
+			'memberpress-gift-reporter',
+			false,
+			dirname( MPGR_PLUGIN_BASENAME ) . '/languages'
+		);
 	}
     
     /**
@@ -166,8 +181,6 @@ class MPGR_MemberPressGiftReporter {
      * Load the plugin
      */
 	public function load_plugin() {
-		// Text domain is automatically loaded by WordPress for plugins hosted on WordPress.org
-
 		// Load the main report class.
 		require_once MPGR_PLUGIN_PATH . 'includes/class-gift-report.php';
 
