@@ -16,7 +16,7 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 ## Plugin Information
 
 - **Plugin page:** [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/)
-- **Version:** 1.6.3
+- **Version:** 1.7.0
 - **Requires at least:** WordPress 5.0
 - **Tested up to:** WordPress 6.9
 - **Requires PHP:** 7.4 or higher
@@ -45,6 +45,7 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 - **Automatic Reminder System**: Automated email reminders for unclaimed gifts
   - Daily cron schedule for efficient processing
   - Multiple customizable reminder schedules (hours or days)
+  - Customizable **From Name** and **From Email** for all plugin emails (reminders, resends, bulk send, weekly summary)
   - Fully customizable email templates with variable support
   - Test email functionality to preview emails
   - Theme override support for email templates
@@ -103,7 +104,8 @@ The plugin has two main tabs: **Gift Report** and **Reminders**.
    - Add multiple reminder schedules (hours or days after purchase)
    - Each schedule can have different delays (e.g., 7 days, 14 days, 30 days)
    - Reminders are sent automatically via daily cron job
-4. Customize email content:
+4. Customize sender and email content:
+   - **From Name** / **From Email**: Optional sender identity (defaults to site name and admin email)
    - **Email Subject**: Customize the subject line with variables
    - **Email Body**: Use the rich text editor to customize the email content
    - Available variables: `{$product_name}`, `{$redemption_link}`, `{$site_name}`, `{$user_email}`, `{$user_first_name}`, etc.
@@ -298,6 +300,7 @@ This plugin is licensed under the GPL v2 or later.
 
 Recent versions (full history in [readme.txt](readme.txt) or on [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/#developers)):
 
+- **1.7.0** — Customizable From Name/Email; centralized filter sanitization; safer CSV export; improved cron cleanup and admin UI
 - **1.6.3** — WordPress 6.7+ translation loading fix (no early textdomain notice)
 - **1.6.2** — Tested up to WordPress 6.9; plugin header updates
 - **1.6.1** — Fixed gift redemption links (use product URLs instead of hardcoded path)
