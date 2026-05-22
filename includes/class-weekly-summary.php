@@ -124,7 +124,23 @@ class MPGR_Weekly_Summary {
 	 * Run weekly summary email (called by WP-Cron)
 	 */
 	public static function run_weekly_summary() {
-		// Check if weekly summary is enabled
+		$lock_key = 'mpgr_weekly_summary_lock';
+		if ( get_transient( $lock_key ) ) {
+			return;
+		}
+		set_transient( $lock_key, time(), 5 * MINUTE_IN_SECONDS );
+
+		try {
+			self::run_weekly_summary_work();
+		} finally {
+			delete_transient( $lock_key );
+		}
+	}
+
+	/**
+	 * Weekly summary cron worker (called under lock from run_weekly_summary).
+	 */
+	private static function run_weekly_summary_work() {
 		$settings = self::get_settings();
 		if ( empty( $settings['enabled'] ) ) {
 			return;

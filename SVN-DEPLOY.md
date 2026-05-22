@@ -1,104 +1,68 @@
-# Deploying to WordPress.org Plugin Directory (SVN)
+# Deploying to WordPress.org (SVN)
 
-This project uses Git; WordPress.org hosts plugins in **SVN**. Use the steps below to publish updates to [wordpress.org/plugins/memberpress-gift-reporter](https://wordpress.org/plugins/memberpress-gift-reporter/).
+WordPress.org hosts this plugin in **SVN**: `https://plugins.svn.wordpress.org/memberpress-gift-reporter`
+
+**Version source of truth:** `* Version:` in `gift-reporter-for-memberpress.php` (must match `Stable tag` in `readme.txt`).
 
 ## Prerequisites
 
-- **SVN** installed (`svn --version`)
-- **WordPress.org plugin SVN** access (same account as the one used to submit the plugin)
-- **Stable tag** in `readme.txt` must match the version you are releasing (e.g. `Stable tag: 1.6.2`)
+- Plugin approved on WordPress.org with SVN access
+- [SVN application password](https://make.wordpress.org/meta/handbook/tutorials-guides/svn-access/) for your WordPress.org username
+- Local tools: `bash`, `rsync`, `zip`, `unzip`, `svn` (macOS: `brew install subversion`)
+- For GitHub deploy: repository secrets `SVN_USERNAME` and `SVN_PASSWORD`
 
-## Quick deploy (recommended)
-
-### 1. Prepare the SVN export
-
-From the plugin root:
+## Quick deploy (local)
 
 ```bash
-chmod +x deploy-svn.sh
-./deploy-svn.sh
+# 1. Bump Version in gift-reporter-for-memberpress.php and Stable tag in readme.txt
+
+# 2. Build release zip (runs npm build when package.json exists)
+bash scripts/build-release.sh
+
+# 3. Deploy to WordPress.org SVN
+export SVN_USERNAME=your-wp-org-username
+export SVN_PASSWORD=your-application-password
+bash scripts/deploy-wordpress-org-svn.sh
+
+# 4. Refresh local SVN mirror
+bash scripts/sync-local-svn-working-copy.sh
 ```
 
-This creates `svn-export/` with only the files that should go in WordPress.org (no `.git`, `node_modules`, dev docs, etc.).
+Output zip: `dist/memberpress-gift-reporter-x.y.z.zip`
 
-### 2. Checkout WordPress.org SVN (first time only)
+## GitHub release deploy
+
+1. Bump `Version` and `Stable tag`, commit and push.
+2. Create a GitHub Release with tag `x.y.z` or `vx.y.z` (must match plugin header `Version`).
+3. The **Deploy to WordPress.org** workflow runs automatically.
+4. Locally after success: `bash scripts/sync-local-svn-working-copy.sh`
+
+## Manual SVN (prepare only)
 
 ```bash
-svn co https://plugins.svn.wordpress.org/memberpress-gift-reporter/ wp-svn
-cd wp-svn
+bash scripts/build-release.sh
+svn checkout https://plugins.svn.wordpress.org/memberpress-gift-reporter ~/svn-wc
+bash scripts/prepare-wordpress-org-svn-working-copy.sh ~/svn-wc
+cd ~/svn-wc
+svn add --force trunk assets
+svn commit -m "Release x.y.z"
+svn copy https://plugins.svn.wordpress.org/memberpress-gift-reporter/trunk \
+         https://plugins.svn.wordpress.org/memberpress-gift-reporter/tags/x.y.z \
+         -m "Tag x.y.z"
 ```
 
-### 3. Update trunk and tag
+## Assets
 
-From the plugin root (not inside `wp-svn`):
+- Directory icons/banners: `wordpress-org-assets/` (see `wordpress-org-assets/README.md`)
+- Screenshot: `screenshots/dashboard.png` → SVN `assets/screenshot-1.png`
 
-```bash
-# Copy export into trunk
-rsync -av --delete svn-export/ wp-svn/trunk/
+## Scripts
 
-# Create or update the tag for current version (e.g. 1.6.2)
-# Replace 1.6.2 with the "Stable tag" from readme.txt
-rm -rf wp-svn/tags/1.6.2
-cp -r svn-export wp-svn/tags/1.6.2
-```
+| Script | Purpose |
+|--------|---------|
+| `scripts/build-release.sh` | Build `dist/memberpress-gift-reporter-x.y.z.zip` |
+| `scripts/prepare-wordpress-org-svn-working-copy.sh` | Copy zip into SVN `trunk/` and assets |
+| `scripts/deploy-wordpress-org-svn.sh` | Full deploy: build → commit trunk → create tag |
+| `scripts/sync-local-svn-working-copy.sh` | Local mirror at `memberpress-gift-reporter-svn/` |
 
-### 4. Commit to WordPress.org
-
-```bash
-cd wp-svn
-svn status
-svn add --force trunk tags
-svn ci -m "Update to 1.6.2"
-```
-
-When prompted, use your **WordPress.org** username and password (or app password).
-
----
-
-## Deploy directly into an SVN checkout
-
-If you already have the SVN repo checked out (e.g. `../memberpress-gift-reporter-svn`):
-
-```bash
-./deploy-svn.sh /path/to/memberpress-gift-reporter-svn
-```
-
-The script will:
-
-- Sync the plugin files into `trunk/`
-- Create or update `tags/<version>/` from the "Stable tag" in `readme.txt`
-
-Then:
-
-```bash
-cd /path/to/memberpress-gift-reporter-svn
-svn status
-svn add --force trunk tags
-svn ci -m "Update to 1.6.2"
-```
-
----
-
-## What gets included
-
-- Plugin PHP, JS, CSS, views, languages, `readme.txt`, `LICENSE`, `screenshots/`, `uninstall.php`
-- **Excluded:** `.git/`, `.github/`, `node_modules/`, `package.json`, `composer.json`, `phpcs.xml`, `build.sh`, `README.md`, and other dev-only files
-
----
-
-## WordPress.org SVN layout
-
-| Path        | Purpose |
-|------------|---------|
-| `trunk/`   | What users get when they install "latest" from WordPress.org |
-| `tags/1.6.2/` | Specific release; `readme.txt` "Stable tag" must match the tag folder name |
-| `assets/`  | Plugin page assets (banner, icon) — optional; add here if you use them |
-
----
-
-## Troubleshooting
-
-- **"Stable tag" in readme.txt** must exactly match the tag folder name (e.g. `1.6.2`).
-- **New files:** Run `svn add --force trunk tags` before `svn ci`.
-- **Deleted files:** `svn status` will show them; remove with `svn delete <file>` then commit.
-- **Credentials:** Use your WordPress.org login; for 2FA, create an [Application Password](https://wordpress.org/support/article/application-passwords/) and use it as the password.
+Legacy `deploy-svn.sh` and `build.sh` are superseded by `scripts/build-release.sh`.

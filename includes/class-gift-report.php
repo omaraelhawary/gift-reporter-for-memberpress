@@ -29,6 +29,7 @@ class MPGR_Gift_Report {
 		add_action( 'wp_ajax_mpgr_resend_gift_email', array( $this, 'ajax_resend_gift_email' ) );
 		add_action( 'wp_ajax_mpgr_copy_redemption_link', array( $this, 'ajax_copy_redemption_link' ) );
 		add_action( 'wp_ajax_mpgr_bulk_resend_gift_emails', array( $this, 'ajax_bulk_resend_gift_emails' ) );
+		add_action( 'mpgr_send_queued_gift_email', array( $this, 'process_queued_gift_email' ) );
 
 		// Add REST API endpoint.
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
@@ -196,6 +197,139 @@ class MPGR_Gift_Report {
 	}
     
     /**
+     * Build and send a gift reminder email for one transaction.
+     *
+     * @param int  $gift_transaction_id Gift transaction ID.
+     * @param bool $require_unclaimed   Only send when gift status is unclaimed.
+     * @return array{success: bool, recipient?: string, error?: string}
+     */
+    private function send_gift_email_for_transaction( $gift_transaction_id, $require_unclaimed = false ) {
+        global $wpdb;
+
+        $gift_transaction_id = (int) $gift_transaction_id;
+        if ( $gift_transaction_id <= 0 ) {
+            return array( 'success' => false, 'error' => 'invalid_id' );
+        }
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $gift_transaction = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}mepr_transactions WHERE id = %d",
+                $gift_transaction_id
+            )
+        );
+
+        if ( ! $gift_transaction ) {
+            return array( 'success' => false, 'error' => 'transaction_not_found' );
+        }
+
+        if ( $require_unclaimed ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $gift_status = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT meta_value FROM {$wpdb->prefix}mepr_transaction_meta
+                    WHERE transaction_id = %d AND meta_key = '_gift_status'",
+                    $gift_transaction_id
+                )
+            );
+            if ( $gift_status !== 'unclaimed' && ! empty( $gift_status ) ) {
+                return array( 'success' => false, 'error' => 'already_claimed' );
+            }
+        }
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $gift_coupon_id = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT meta_value FROM {$wpdb->prefix}mepr_transaction_meta
+                WHERE transaction_id = %d AND meta_key = '_gift_coupon_id'",
+                $gift_transaction_id
+            )
+        );
+
+        if ( ! $gift_coupon_id ) {
+            return array( 'success' => false, 'error' => 'coupon_not_found' );
+        }
+
+        $coupon_code = get_post_field( 'post_title', $gift_coupon_id );
+        if ( ! $coupon_code ) {
+            return array( 'success' => false, 'error' => 'coupon_code_not_found' );
+        }
+
+        $gifter_user = get_userdata( $gift_transaction->user_id );
+        if ( ! $gifter_user ) {
+            return array( 'success' => false, 'error' => 'gifter_not_found' );
+        }
+
+        $gifter_email = sanitize_email( $gifter_user->user_email );
+        if ( empty( $gifter_email ) || ! is_email( $gifter_email ) ) {
+            return array( 'success' => false, 'error' => 'invalid_email' );
+        }
+
+        $product_name    = get_post_field( 'post_title', $gift_transaction->product_id );
+        $redemption_link = $this->generate_redemption_url( $gift_transaction->product_id, $coupon_code );
+        $blogname        = get_bloginfo( 'name' );
+
+        $template_vars = array(
+            'product_name'    => $product_name,
+            'redemption_link' => $redemption_link,
+            'site_name'       => $blogname,
+            'blogname'        => $blogname,
+            'user_login'      => $gifter_user->user_login,
+            'user_email'      => $gifter_user->user_email,
+            'user_first_name' => get_user_meta( $gifter_user->ID, 'first_name', true ),
+            'user_last_name'  => get_user_meta( $gifter_user->ID, 'last_name', true ),
+        );
+
+        $settings          = MPGR_Reminders::get_settings();
+        $gifter_email_body = ! empty( $settings['gifter_email_body'] ) ? $settings['gifter_email_body'] : ( ! empty( $settings['email_body'] ) ? $settings['email_body'] : '' );
+
+        if ( ! empty( $gifter_email_body ) ) {
+            $message        = MPGR_Reminders::replace_email_variables( $gifter_email_body, $template_vars );
+            $header_content = MPGR_Reminders::get_email_header( $template_vars );
+            $footer_content = MPGR_Reminders::get_email_footer( $template_vars );
+            $message        = $header_content . $message . $footer_content;
+        } else {
+            $message = MPGR_Reminders::render_email_template( 'reminder-email', $template_vars );
+        }
+
+        $gifter_subject = ! empty( $settings['gifter_email_subject'] ) ? $settings['gifter_email_subject'] : ( ! empty( $settings['email_subject'] ) ? $settings['email_subject'] : '' );
+        if ( ! empty( $gifter_subject ) ) {
+            $subject = MPGR_Reminders::replace_email_variables( $gifter_subject, $template_vars );
+        } else {
+            $subject = sprintf(
+                /* translators: %s: product name */
+                __( 'Your Gift Purchase - %s', 'memberpress-gift-reporter' ),
+                $product_name
+            );
+        }
+
+        $headers = array(
+            'Content-Type: text/html; charset=UTF-8',
+            'From: ' . get_bloginfo( 'name' ) . ' <' . get_option( 'admin_email' ) . '>',
+        );
+
+        $sent = wp_mail( $gifter_email, $subject, $message, $headers );
+
+        if ( ! $sent ) {
+            return array( 'success' => false, 'error' => 'send_failed' );
+        }
+
+        return array(
+            'success'   => true,
+            'recipient' => $gifter_email,
+        );
+    }
+
+    /**
+     * Cron callback: send one queued bulk reminder email.
+     *
+     * @param int $gift_transaction_id Gift transaction ID.
+     */
+    public function process_queued_gift_email( $gift_transaction_id ) {
+        $this->send_gift_email_for_transaction( (int) $gift_transaction_id, true );
+    }
+
+    /**
      * AJAX resend gift email handler
      */
 	public function ajax_resend_gift_email() {
@@ -211,116 +345,21 @@ class MPGR_Gift_Report {
 			wp_send_json_error('Invalid gift transaction ID');
 		}
 
-		// Get gift transaction details
-		global $wpdb;
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for gift transaction lookup
-		$gift_transaction = $wpdb->get_row($wpdb->prepare(
-			"SELECT * FROM {$wpdb->prefix}mepr_transactions WHERE id = %d",
-			$gift_transaction_id
-		));
+		$result = $this->send_gift_email_for_transaction( $gift_transaction_id, false );
 
-		if (!$gift_transaction) {
-			wp_send_json_error('Gift transaction not found');
+		if ( ! empty( $result['success'] ) ) {
+			wp_send_json_success(
+				array(
+					'message' => sprintf(
+						/* translators: %s: gifter email address */
+						__( 'Gift email resent successfully to %s', 'memberpress-gift-reporter' ),
+						$result['recipient']
+					),
+				)
+			);
 		}
 
-		// Get gift coupon ID
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for gift coupon lookup
-		$gift_coupon_id = $wpdb->get_var($wpdb->prepare(
-			"SELECT meta_value FROM {$wpdb->prefix}mepr_transaction_meta 
-			WHERE transaction_id = %d AND meta_key = '_gift_coupon_id'",
-			$gift_transaction_id
-		));
-
-		if (!$gift_coupon_id) {
-			wp_send_json_error('Gift coupon not found');
-		}
-
-		// Get coupon code
-		$coupon_code = get_post_field('post_title', $gift_coupon_id);
-		
-		if (!$coupon_code) {
-			wp_send_json_error('Coupon code not found');
-		}
-
-		// Get gifter email
-		$gifter_email = get_userdata($gift_transaction->user_id)->user_email;
-		
-		if (!$gifter_email) {
-			wp_send_json_error('Gifter email not found');
-		}
-
-		// Get product name
-		$product_name = get_post_field('post_title', $gift_transaction->product_id);
-
-		// Generate redemption link using product URL
-		$redemption_link = $this->generate_redemption_url( $gift_transaction->product_id, $coupon_code );
-
-		// Get user data for template variables
-		$user = get_userdata($gift_transaction->user_id);
-		$user_login      = $user ? $user->user_login : '';
-		$user_email      = $user ? $user->user_email : '';
-		$user_first_name = $user ? get_user_meta( $user->ID, 'first_name', true ) : '';
-		$user_last_name  = $user ? get_user_meta( $user->ID, 'last_name', true ) : '';
-		$blogname        = get_bloginfo('name');
-
-		// Prepare email template variables (same as reminders)
-		$template_vars = array(
-			'product_name'    => $product_name,
-			'redemption_link' => $redemption_link,
-			'site_name'       => $blogname,
-			'blogname'        => $blogname,
-			'user_login'      => $user_login,
-			'user_email'      => $user_email,
-			'user_first_name' => $user_first_name,
-			'user_last_name'  => $user_last_name,
-		);
-
-		// Get reminder settings to use same email template/subject as reminders
-		$settings = MPGR_Reminders::get_settings();
-		
-		// Get email body (use same logic as reminders)
-		$gifter_email_body = ! empty( $settings['gifter_email_body'] ) ? $settings['gifter_email_body'] : ( ! empty( $settings['email_body'] ) ? $settings['email_body'] : '' );
-		
-		if ( ! empty( $gifter_email_body ) ) {
-			// Use custom email body with variable replacement (MemberPress style: {$variable})
-			$message = $gifter_email_body;
-			$message = MPGR_Reminders::replace_email_variables( $message, $template_vars );
-			
-			// Wrap custom body with header/footer templates
-			$header_content = MPGR_Reminders::get_email_header( $template_vars );
-			$footer_content = MPGR_Reminders::get_email_footer( $template_vars );
-			$message = $header_content . $message . $footer_content;
-		} else {
-			// Render email template (includes header/footer automatically)
-			$message = MPGR_Reminders::render_email_template( 'reminder-email', $template_vars );
-		}
-
-		// Get email subject (use same logic as reminders)
-		$gifter_subject = ! empty( $settings['gifter_email_subject'] ) ? $settings['gifter_email_subject'] : ( ! empty( $settings['email_subject'] ) ? $settings['email_subject'] : '' );
-		
-		if ( ! empty( $gifter_subject ) ) {
-			$subject = MPGR_Reminders::replace_email_variables( $gifter_subject, $template_vars );
-		} else {
-			// translators: %s is the product name
-			$subject = sprintf( __( 'Your Gift Purchase - %s', 'memberpress-gift-reporter' ), $product_name );
-		}
-
-		// Set headers for HTML email
-		$headers = array(
-			'Content-Type: text/html; charset=UTF-8',
-			'From: ' . get_bloginfo('name') . ' <' . get_option('admin_email') . '>'
-		);
-		
-		$sent = wp_mail($gifter_email, $subject, $message, $headers);
-
-		if ($sent) {
-			wp_send_json_success(array(
-				// translators: %s is the gifter email address
-				'message' => sprintf(__('Gift email resent successfully to %s', 'memberpress-gift-reporter'), $gifter_email)
-			));
-		} else {
-			wp_send_json_error(__('Failed to send gift email. Please check your email configuration.', 'memberpress-gift-reporter'));
-		}
+		wp_send_json_error( __( 'Failed to send gift email. Please check your email configuration.', 'memberpress-gift-reporter' ) );
 	}
     
     /**
@@ -390,215 +429,85 @@ class MPGR_Gift_Report {
 			wp_send_json_error( array( 'message' => esc_html__( 'Access denied', 'memberpress-gift-reporter' ) ) );
 		}
 
-		// Get gift transaction IDs
-		$gift_transaction_ids = isset($_POST['gift_transaction_ids']) ? array_map('intval', $_POST['gift_transaction_ids']) : array();
+		$raw_ids = isset( $_POST['gift_transaction_ids'] ) ? wp_unslash( $_POST['gift_transaction_ids'] ) : array();
+		if ( ! is_array( $raw_ids ) ) {
+			wp_send_json_error( array( 'message' => esc_html__( 'Invalid input.', 'memberpress-gift-reporter' ) ) );
+		}
+
+		$gift_transaction_ids = array_filter( array_map( 'intval', $raw_ids ) );
 		
 		if (empty($gift_transaction_ids)) {
 			wp_send_json_error( array( 'message' => esc_html__( 'No gifts selected', 'memberpress-gift-reporter' ) ) );
 		}
 
-		// Limit to prevent timeouts
 		$max_bulk_limit = 100;
-		if (count($gift_transaction_ids) > $max_bulk_limit) {
-			wp_send_json_error( array( 
-				'message' => sprintf( 
-					/* translators: %d: Maximum number of gifts allowed per batch */
-					esc_html__( 'Too many gifts selected. Maximum %d gifts allowed per batch.', 'memberpress-gift-reporter' ), 
-					$max_bulk_limit 
-				) 
-			) );
+		if ( count( $gift_transaction_ids ) > $max_bulk_limit ) {
+			wp_send_json_error(
+				array(
+					'message' => sprintf(
+						/* translators: %d: maximum gifts per batch */
+						esc_html__( 'Too many gifts selected. Maximum %d gifts allowed per batch.', 'memberpress-gift-reporter' ),
+						$max_bulk_limit
+					),
+				)
+			);
 		}
-
-		$success_count = 0;
-		$failed_count = 0;
-		$failed_gifts = array();
-		$sent_details = array(); // Track which emails were sent to which gifts
 
 		global $wpdb;
 
-		foreach ($gift_transaction_ids as $gift_transaction_id) {
-			// Get gift transaction details
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for gift transaction lookup
-			$gift_transaction = $wpdb->get_row($wpdb->prepare(
-				"SELECT * FROM {$wpdb->prefix}mepr_transactions WHERE id = %d",
-				$gift_transaction_id
-			));
+		$queued_count  = 0;
+		$skipped_count = 0;
+		$delay_index   = 0;
 
-			if (!$gift_transaction) {
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
-				continue;
-			}
-
-			// Only send to unclaimed gifts
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for gift status lookup
-			$gift_status = $wpdb->get_var($wpdb->prepare(
-				"SELECT meta_value FROM {$wpdb->prefix}mepr_transaction_meta 
-				WHERE transaction_id = %d AND meta_key = '_gift_status'",
-				$gift_transaction_id
-			));
-
-			// If status is not explicitly 'unclaimed', check if it should be (default)
-			if ($gift_status !== 'unclaimed' && !empty($gift_status)) {
-				// Skip claimed gifts
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
-				continue;
-			}
-
-			// Get gift coupon ID
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for gift coupon lookup
-			$gift_coupon_id = $wpdb->get_var($wpdb->prepare(
-				"SELECT meta_value FROM {$wpdb->prefix}mepr_transaction_meta 
-				WHERE transaction_id = %d AND meta_key = '_gift_coupon_id'",
-				$gift_transaction_id
-			));
-
-			if (!$gift_coupon_id) {
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
-				continue;
-			}
-
-			// Get coupon code
-			$coupon_code = get_post_field('post_title', $gift_coupon_id);
-			
-			if (!$coupon_code) {
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
-				continue;
-			}
-
-			// Get gifter email - ensure we get it fresh for each transaction
-			$gifter_user = get_userdata($gift_transaction->user_id);
-			if (!$gifter_user) {
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
-				continue;
-			}
-
-			$gifter_email = sanitize_email($gifter_user->user_email);
-			
-			if (empty($gifter_email)) {
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
-				continue;
-			}
-
-			// Get product name
-			$product_name = get_post_field('post_title', $gift_transaction->product_id);
-
-			// Generate redemption link using product URL
-			$redemption_link = $this->generate_redemption_url( $gift_transaction->product_id, $coupon_code );
-
-			// Get user data for template variables
-			$user_login      = $gifter_user->user_login;
-			$user_email      = $gifter_user->user_email;
-			$user_first_name = get_user_meta( $gifter_user->ID, 'first_name', true );
-			$user_last_name  = get_user_meta( $gifter_user->ID, 'last_name', true );
-			$blogname        = get_bloginfo('name');
-
-			// Prepare email template variables (same as reminders)
-			$template_vars = array(
-				'product_name'    => $product_name,
-				'redemption_link' => $redemption_link,
-				'site_name'       => $blogname,
-				'blogname'        => $blogname,
-				'user_login'      => $user_login,
-				'user_email'      => $user_email,
-				'user_first_name' => $user_first_name,
-				'user_last_name'  => $user_last_name,
+		foreach ( $gift_transaction_ids as $gift_transaction_id ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$gift_status = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT meta_value FROM {$wpdb->prefix}mepr_transaction_meta
+					WHERE transaction_id = %d AND meta_key = '_gift_status'",
+					$gift_transaction_id
+				)
 			);
 
-			// Get reminder settings to use same email template/subject as reminders
-			$settings = MPGR_Reminders::get_settings();
-			
-			// Get email body (use same logic as reminders)
-			$gifter_email_body = ! empty( $settings['gifter_email_body'] ) ? $settings['gifter_email_body'] : ( ! empty( $settings['email_body'] ) ? $settings['email_body'] : '' );
-			
-			if ( ! empty( $gifter_email_body ) ) {
-				// Use custom email body with variable replacement (MemberPress style: {$variable})
-				$message = $gifter_email_body;
-				$message = MPGR_Reminders::replace_email_variables( $message, $template_vars );
-				
-				// Wrap custom body with header/footer templates
-				$header_content = MPGR_Reminders::get_email_header( $template_vars );
-				$footer_content = MPGR_Reminders::get_email_footer( $template_vars );
-				$message = $header_content . $message . $footer_content;
-			} else {
-				// Render email template (includes header/footer automatically)
-				$message = MPGR_Reminders::render_email_template( 'reminder-email', $template_vars );
-			}
-
-			// Get email subject (use same logic as reminders)
-			$gifter_subject = ! empty( $settings['gifter_email_subject'] ) ? $settings['gifter_email_subject'] : ( ! empty( $settings['email_subject'] ) ? $settings['email_subject'] : '' );
-			
-			if ( ! empty( $gifter_subject ) ) {
-				$subject = MPGR_Reminders::replace_email_variables( $gifter_subject, $template_vars );
-			} else {
-				// translators: %s is the product name
-				$subject = sprintf( __( 'Your Gift Purchase - %s', 'memberpress-gift-reporter' ), $product_name );
-			}
-
-			// Set headers for HTML email
-			$headers = array(
-				'Content-Type: text/html; charset=UTF-8',
-				'From: ' . get_bloginfo('name') . ' <' . get_option('admin_email') . '>'
-			);
-			
-			// Ensure we're sending to the correct email for this specific gift
-			// Store email in a variable to ensure it's not modified by reference
-			$recipient_email = trim($gifter_email);
-			
-			// Verify email is valid before sending
-			if (!is_email($recipient_email)) {
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
+			if ( $gift_status !== 'unclaimed' && ! empty( $gift_status ) ) {
+				++$skipped_count;
 				continue;
 			}
-			
-			// Send email - wp_mail first parameter is the recipient
-			// Use explicit variable to avoid any closure or reference issues
-			$sent = wp_mail($recipient_email, $subject, $message, $headers);
-			
-			// Clear any WordPress query caches that might interfere
-			wp_cache_flush_group('useremail');
 
-			if ($sent) {
-				$success_count++;
-				// Track successful sends - use the actual recipient email
-				$sent_details[] = array(
-					'gift_id' => $gift_transaction_id,
-					'email' => $recipient_email,
-					'user_id' => $gift_transaction->user_id
-				);
-			} else {
-				$failed_count++;
-				$failed_gifts[] = $gift_transaction_id;
-			}
-
-			// Add small delay to prevent overwhelming mail server
-			usleep(500000); // 0.5 second delay between emails
+			wp_schedule_single_event(
+				time() + $delay_index,
+				'mpgr_send_queued_gift_email',
+				array( $gift_transaction_id )
+			);
+			++$queued_count;
+			++$delay_index;
 		}
 
-		// Prepare response message
-		if ($success_count > 0 && $failed_count === 0) {
-			// translators: %d is the number of emails sent
-			$message = sprintf( esc_html__( 'Successfully sent %d reminder email(s).', 'memberpress-gift-reporter' ), $success_count );
-		} elseif ($success_count > 0 && $failed_count > 0) {
-			// translators: %1$d is success count, %2$d is failed count
-			$message = sprintf( esc_html__( 'Sent %1$d email(s) successfully. %2$d email(s) failed.', 'memberpress-gift-reporter' ), $success_count, $failed_count );
-		} else {
-			$message = esc_html__( 'Failed to send reminder emails. Please check your email configuration.', 'memberpress-gift-reporter' );
+		if ( 0 === $queued_count ) {
+			wp_send_json_error(
+				array(
+					'message' => esc_html__( 'No eligible unclaimed gifts to queue. Claimed or invalid gifts were skipped.', 'memberpress-gift-reporter' ),
+				)
+			);
 		}
 
-		wp_send_json_success(array(
-			'message' => $message,
-			'success_count' => $success_count,
-			'failed_count' => $failed_count,
-			'failed_gifts' => $failed_gifts,
-			'sent_details' => $sent_details
-		));
+		if ( ! wp_next_scheduled( 'mpgr_send_queued_gift_email' ) && function_exists( 'spawn_cron' ) ) {
+			spawn_cron();
+		}
+
+		wp_send_json_success(
+			array(
+				'message'       => sprintf(
+					/* translators: %d: number of queued emails */
+					esc_html__( '%d reminder email(s) queued. They will be sent over the next few minutes.', 'memberpress-gift-reporter' ),
+					$queued_count
+				),
+				'queued_count'  => $queued_count,
+				'skipped_count' => $skipped_count,
+				'success_count' => $queued_count,
+				'failed_count'  => $skipped_count,
+			)
+		);
 	}
     
     /**
@@ -831,15 +740,16 @@ class MPGR_Gift_Report {
 
     
     /**
-     * Generate the gift report data
+     * Build WHERE conditions for report queries (shared by list and summary).
+     *
+     * @param array $filters Filter values.
+     * @return array Prepared SQL condition fragments.
      */
-    public function generate_report($limit = 1000, $offset = 0, $filters = array()) {
+    private function build_where_conditions( $filters = array() ) {
         global $wpdb;
-        
-        // Build WHERE clause for filters
-        $where_conditions = array();
+
+        $where_conditions   = array();
         $where_conditions[] = "gifter_txn.status IN ('complete', 'confirmed', 'refunded')";
-        // Only include actual gift purchase transactions (not claim transactions).
         $where_conditions[] = "EXISTS (
             SELECT 1 FROM {$wpdb->prefix}mepr_transaction_meta AS gift_meta_check
             WHERE gift_meta_check.transaction_id = gifter_txn.id
@@ -848,88 +758,141 @@ class MPGR_Gift_Report {
                 OR (gift_meta_check.meta_key = '_gift_coupon_id' AND gift_meta_check.meta_value IS NOT NULL AND gift_meta_check.meta_value != '')
             )
         )";
-        // FIXED: Exclude transactions that are gift claims (€0.00 transactions with gift metadata)
-        $where_conditions[] = "gifter_txn.amount > 0";
-        
-        // Date From filter
-        if (!empty($filters['date_from'])) {
-            $date_from = sanitize_text_field($filters['date_from']);
-            // Validate date format and convert to proper format
-            if ($this->is_valid_date($date_from)) {
-                $date_from_formatted = gmdate('Y-m-d 00:00:00', strtotime($date_from));
-                $where_conditions[] = $wpdb->prepare("gifter_txn.created_at >= %s", $date_from_formatted);
+        $where_conditions[] = 'gifter_txn.amount > 0';
+
+        if ( ! empty( $filters['date_from'] ) ) {
+            $date_from = sanitize_text_field( $filters['date_from'] );
+            if ( $this->is_valid_date( $date_from ) ) {
+                $date_from_formatted  = gmdate( 'Y-m-d 00:00:00', strtotime( $date_from ) );
+                $where_conditions[]   = $wpdb->prepare( 'gifter_txn.created_at >= %s', $date_from_formatted );
             }
-        }
-        
-        // Date To filter
-        if (!empty($filters['date_to'])) {
-            $date_to = sanitize_text_field($filters['date_to']);
-            // Validate date format and convert to proper format
-            if ($this->is_valid_date($date_to)) {
-                $date_to_formatted = gmdate('Y-m-d 23:59:59', strtotime($date_to));
-                $where_conditions[] = $wpdb->prepare("gifter_txn.created_at <= %s", $date_to_formatted);
-            }
-        }
-        
-        // Gift Status filter
-        if (!empty($filters['gift_status'])) {
-            $gift_status = sanitize_text_field($filters['gift_status']);
-            $where_conditions[] = $wpdb->prepare("COALESCE(gift_status.meta_value, 'unclaimed') = %s", $gift_status);
-        }
-        
-        // Product filter
-        if (!empty($filters['product'])) {
-            $product_id = intval($filters['product']);
-            $where_conditions[] = $wpdb->prepare("gifter_txn.product_id = %d", $product_id);
-        }
-        
-        // Gifter Email filter
-        if (!empty($filters['gifter_email'])) {
-            $gifter_email = sanitize_email($filters['gifter_email']);
-            $where_conditions[] = $wpdb->prepare("gifter.user_email LIKE %s", '%' . $wpdb->esc_like($gifter_email) . '%');
-        }
-        
-        // Recipient Email filter
-        if (!empty($filters['recipient_email'])) {
-            $recipient_email = sanitize_email($filters['recipient_email']);
-            $where_conditions[] = $wpdb->prepare("recipient.user_email LIKE %s", '%' . $wpdb->esc_like($recipient_email) . '%');
-        }
-        
-        // Transaction ID filter
-        if (!empty($filters['transaction_id'])) {
-            $transaction_id = sanitize_text_field($filters['transaction_id']);
-            $where_conditions[] = $wpdb->prepare("gifter_txn.trans_num LIKE %s", '%' . $wpdb->esc_like($transaction_id) . '%');
-        }
-        
-        // Claim Transaction ID filter
-        if (!empty($filters['claim_transaction_id'])) {
-            $claim_transaction_id = sanitize_text_field($filters['claim_transaction_id']);
-            $where_conditions[] = $wpdb->prepare("redemption_txn.trans_num LIKE %s", '%' . $wpdb->esc_like($claim_transaction_id) . '%');
         }
 
-        
-        // Redemption From filter
-        if (!empty($filters['redemption_from'])) {
-            $redemption_from = sanitize_text_field($filters['redemption_from']);
-            // Validate date format and convert to proper format
-            if ($this->is_valid_date($redemption_from)) {
-                $redemption_from_formatted = gmdate('Y-m-d 00:00:00', strtotime($redemption_from));
-                $where_conditions[] = $wpdb->prepare("redemption_txn.created_at >= %s", $redemption_from_formatted);
+        if ( ! empty( $filters['date_to'] ) ) {
+            $date_to = sanitize_text_field( $filters['date_to'] );
+            if ( $this->is_valid_date( $date_to ) ) {
+                $date_to_formatted  = gmdate( 'Y-m-d 23:59:59', strtotime( $date_to ) );
+                $where_conditions[] = $wpdb->prepare( 'gifter_txn.created_at <= %s', $date_to_formatted );
             }
         }
-        
-        // Redemption To filter
-        if (!empty($filters['redemption_to'])) {
-            $redemption_to = sanitize_text_field($filters['redemption_to']);
-            // Validate date format and convert to proper format
-            if ($this->is_valid_date($redemption_to)) {
-                $redemption_to_formatted = gmdate('Y-m-d 23:59:59', strtotime($redemption_to));
-                $where_conditions[] = $wpdb->prepare("redemption_txn.created_at <= %s", $redemption_to_formatted);
+
+        if ( ! empty( $filters['gift_status'] ) ) {
+            $gift_status        = sanitize_text_field( $filters['gift_status'] );
+            $where_conditions[] = $wpdb->prepare( "COALESCE(gift_status.meta_value, 'unclaimed') = %s", $gift_status );
+        }
+
+        if ( ! empty( $filters['product'] ) ) {
+            $product_id         = intval( $filters['product'] );
+            $where_conditions[] = $wpdb->prepare( 'gifter_txn.product_id = %d', $product_id );
+        }
+
+        if ( ! empty( $filters['gifter_email'] ) ) {
+            $gifter_email       = sanitize_email( $filters['gifter_email'] );
+            $where_conditions[] = $wpdb->prepare( 'gifter.user_email LIKE %s', '%' . $wpdb->esc_like( $gifter_email ) . '%' );
+        }
+
+        if ( ! empty( $filters['recipient_email'] ) ) {
+            $recipient_email    = sanitize_email( $filters['recipient_email'] );
+            $where_conditions[] = $wpdb->prepare( 'recipient.user_email LIKE %s', '%' . $wpdb->esc_like( $recipient_email ) . '%' );
+        }
+
+        if ( ! empty( $filters['transaction_id'] ) ) {
+            $transaction_id     = sanitize_text_field( $filters['transaction_id'] );
+            $where_conditions[] = $wpdb->prepare( 'gifter_txn.trans_num LIKE %s', '%' . $wpdb->esc_like( $transaction_id ) . '%' );
+        }
+
+        if ( ! empty( $filters['claim_transaction_id'] ) ) {
+            $claim_transaction_id = sanitize_text_field( $filters['claim_transaction_id'] );
+            $where_conditions[]   = $wpdb->prepare( 'redemption_txn.trans_num LIKE %s', '%' . $wpdb->esc_like( $claim_transaction_id ) . '%' );
+        }
+
+        if ( ! empty( $filters['redemption_from'] ) ) {
+            $redemption_from = sanitize_text_field( $filters['redemption_from'] );
+            if ( $this->is_valid_date( $redemption_from ) ) {
+                $redemption_from_formatted = gmdate( 'Y-m-d 00:00:00', strtotime( $redemption_from ) );
+                $where_conditions[]        = $wpdb->prepare( 'redemption_txn.created_at >= %s', $redemption_from_formatted );
             }
         }
-        
-        // Build WHERE clause string - all conditions are already properly prepared via $wpdb->prepare()
-        $where_clause = implode(' AND ', $where_conditions);
+
+        if ( ! empty( $filters['redemption_to'] ) ) {
+            $redemption_to = sanitize_text_field( $filters['redemption_to'] );
+            if ( $this->is_valid_date( $redemption_to ) ) {
+                $redemption_to_formatted = gmdate( 'Y-m-d 23:59:59', strtotime( $redemption_to ) );
+                $where_conditions[]      = $wpdb->prepare( 'redemption_txn.created_at <= %s', $redemption_to_formatted );
+            }
+        }
+
+        return $where_conditions;
+    }
+
+    /**
+     * Shared JOIN clause for report and summary queries.
+     *
+     * @return string SQL JOIN fragment.
+     */
+    private function get_report_joins_sql() {
+        global $wpdb;
+
+        return "
+            LEFT JOIN {$wpdb->users} AS gifter
+                ON gifter_txn.user_id = gifter.ID
+
+            LEFT JOIN {$wpdb->usermeta} AS gifter_fname
+                ON gifter.ID = gifter_fname.user_id
+                AND gifter_fname.meta_key = 'first_name'
+
+            LEFT JOIN {$wpdb->usermeta} AS gifter_lname
+                ON gifter.ID = gifter_lname.user_id
+                AND gifter_lname.meta_key = 'last_name'
+
+            INNER JOIN {$wpdb->posts} AS gift_product
+                ON gifter_txn.product_id = gift_product.ID
+
+            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS coupon_meta
+                ON gifter_txn.id = coupon_meta.transaction_id
+                AND coupon_meta.meta_key = '_gift_coupon_id'
+            LEFT JOIN {$wpdb->posts} AS gift_coupon
+                ON coupon_meta.meta_value = gift_coupon.ID
+                AND gift_coupon.post_status = 'publish'
+
+            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS gift_status
+                ON gifter_txn.id = gift_status.transaction_id
+                AND gift_status.meta_key = '_gift_status'
+
+            LEFT JOIN (
+                SELECT coupon_id, MIN(id) AS id
+                FROM {$wpdb->prefix}mepr_transactions
+                WHERE status = 'complete'
+                AND coupon_id IS NOT NULL
+                AND coupon_id > 0
+                GROUP BY coupon_id
+            ) AS redemption_pick
+                ON coupon_meta.meta_value = redemption_pick.coupon_id
+            LEFT JOIN {$wpdb->prefix}mepr_transactions AS redemption_txn
+                ON redemption_txn.id = redemption_pick.id
+                AND redemption_txn.id != gifter_txn.id
+
+            LEFT JOIN {$wpdb->users} AS recipient
+                ON redemption_txn.user_id = recipient.ID
+
+            LEFT JOIN {$wpdb->usermeta} AS recipient_fname
+                ON recipient.ID = recipient_fname.user_id
+                AND recipient_fname.meta_key = 'first_name'
+
+            LEFT JOIN {$wpdb->usermeta} AS recipient_lname
+                ON recipient.ID = recipient_lname.user_id
+                AND recipient_lname.meta_key = 'last_name'
+        ";
+    }
+
+    /**
+     * Generate the gift report data
+     */
+    public function generate_report($limit = 1000, $offset = 0, $filters = array()) {
+        global $wpdb;
+
+        $where_conditions = $this->build_where_conditions( $filters );
+        $where_clause     = implode( ' AND ', $where_conditions );
         
         // Build LIMIT clause safely using $wpdb->prepare()
         $limit_clause = '';
@@ -987,59 +950,7 @@ class MPGR_Gift_Report {
 
         FROM 
             {$wpdb->prefix}mepr_transactions AS gifter_txn
-            
-            LEFT JOIN {$wpdb->users} AS gifter 
-                ON gifter_txn.user_id = gifter.ID
-            
-            LEFT JOIN {$wpdb->usermeta} AS gifter_fname 
-                ON gifter.ID = gifter_fname.user_id 
-                AND gifter_fname.meta_key = 'first_name'
-            
-            LEFT JOIN {$wpdb->usermeta} AS gifter_lname 
-                ON gifter.ID = gifter_lname.user_id 
-                AND gifter_lname.meta_key = 'last_name'
-            
-            INNER JOIN {$wpdb->posts} AS gift_product 
-                ON gifter_txn.product_id = gift_product.ID
-            
-            -- Get coupon information (handle deleted coupons)
-            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS coupon_meta 
-                ON gifter_txn.id = coupon_meta.transaction_id 
-                AND coupon_meta.meta_key = '_gift_coupon_id'
-            LEFT JOIN {$wpdb->posts} AS gift_coupon 
-                ON coupon_meta.meta_value = gift_coupon.ID
-                AND gift_coupon.post_status = 'publish'
-            
-            -- Get gift status
-            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS gift_status 
-                ON gifter_txn.id = gift_status.transaction_id 
-                AND gift_status.meta_key = '_gift_status'
-            
-            -- Pick one redemption per coupon (earliest complete transaction) for ONLY_FULL_GROUP_BY safety.
-            LEFT JOIN (
-                SELECT coupon_id, MIN(id) AS id
-                FROM {$wpdb->prefix}mepr_transactions
-                WHERE status = 'complete'
-                AND coupon_id IS NOT NULL
-                AND coupon_id > 0
-                GROUP BY coupon_id
-            ) AS redemption_pick
-                ON coupon_meta.meta_value = redemption_pick.coupon_id
-            LEFT JOIN {$wpdb->prefix}mepr_transactions AS redemption_txn
-                ON redemption_txn.id = redemption_pick.id
-                AND redemption_txn.id != gifter_txn.id
-            
-            LEFT JOIN {$wpdb->users} AS recipient 
-                ON redemption_txn.user_id = recipient.ID
-            
-            LEFT JOIN {$wpdb->usermeta} AS recipient_fname 
-                ON recipient.ID = recipient_fname.user_id 
-                AND recipient_fname.meta_key = 'first_name'
-            
-            LEFT JOIN {$wpdb->usermeta} AS recipient_lname 
-                ON recipient.ID = recipient_lname.user_id 
-                AND recipient_lname.meta_key = 'last_name'
-
+            " . $this->get_report_joins_sql() . "
         WHERE 
             " . $where_clause . "
 
@@ -1217,31 +1128,37 @@ class MPGR_Gift_Report {
      * Get summary statistics
      */
     public function get_summary($filters = array()) {
-        if (empty($this->report_data)) {
-            $this->generate_report(0, 0, $filters);
-        }
-        
-        $total_gifts = count($this->report_data);
-        $claimed_gifts = 0;
-        $unclaimed_gifts = 0;
-        $total_revenue = 0;
-        
-        foreach ($this->report_data as $row) {
-            if ($row['gift_status'] === 'claimed') {
-                $claimed_gifts++;
-            } else {
-                $unclaimed_gifts++;
-            }
-            $total_revenue += floatval($row['gift_total']);
-        }
-        
+        global $wpdb;
+
+        $where_conditions = $this->build_where_conditions( $filters );
+        $where_clause     = implode( ' AND ', $where_conditions );
+
+        $summary_query = "
+        SELECT
+            COUNT(DISTINCT gifter_txn.id) AS total_gifts,
+            SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed' THEN 1 ELSE 0 END) AS claimed_gifts,
+            SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') != 'claimed' THEN 1 ELSE 0 END) AS unclaimed_gifts,
+            SUM(gifter_txn.total) AS total_revenue
+        FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
+        " . $this->get_report_joins_sql() . "
+        WHERE {$where_clause}
+        ";
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        $row = $wpdb->get_row( $summary_query, ARRAY_A );
+
+        $total     = isset( $row['total_gifts'] ) ? (int) $row['total_gifts'] : 0;
+        $claimed   = isset( $row['claimed_gifts'] ) ? (int) $row['claimed_gifts'] : 0;
+        $unclaimed = isset( $row['unclaimed_gifts'] ) ? (int) $row['unclaimed_gifts'] : 0;
+        $revenue   = isset( $row['total_revenue'] ) ? (float) $row['total_revenue'] : 0;
+
         return array(
-            'total_gifts' => $total_gifts,
-            'claimed_gifts' => $claimed_gifts,
-            'unclaimed_gifts' => $unclaimed_gifts,
-            'claim_rate' => $total_gifts > 0 ? round(($claimed_gifts / $total_gifts) * 100, 2) : 0,
-            'total_revenue' => $total_revenue,
-            'total_revenue_formatted' => $this->format_currency($total_revenue)
+            'total_gifts'             => $total,
+            'claimed_gifts'           => $claimed,
+            'unclaimed_gifts'         => $unclaimed,
+            'claim_rate'              => $total > 0 ? round( ( $claimed / $total ) * 100, 2 ) : 0,
+            'total_revenue'           => $revenue,
+            'total_revenue_formatted' => $this->format_currency( $revenue ),
         );
     }
     

@@ -1,0 +1,54 @@
+name: Deploy to WordPress.org
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install Node dependencies and build assets
+        run: npm ci && npm run build
+
+      - name: Validate release tag matches plugin version
+        if: github.event_name == 'release'
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          TAG="${TAG#v}"
+          VERSION="$(sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*//p' gift-reporter-for-memberpress.php | head -n1 | tr -d '\r')"
+          if [[ "${TAG}" != "${VERSION}" ]]; then
+            echo "::error::Release tag ${TAG} does not match plugin Version ${VERSION}"
+            exit 1
+          fi
+          echo "EXPECTED_VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Install Subversion
+        run: sudo apt-get update && sudo apt-get install -y subversion
+
+      - name: Deploy to WordPress.org SVN
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+        run: bash scripts/deploy-wordpress-org-svn.sh
+
+      - name: Remind to refresh local SVN mirror
+        if: success()
+        run: |
+          echo "## Local SVN mirror" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Run on your machine after this workflow succeeds:" >> "${GITHUB_STEP_SUMMARY}"
+          echo '```bash' >> "${GITHUB_STEP_SUMMARY}"
+          echo "bash scripts/sync-local-svn-working-copy.sh" >> "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
+          bash scripts/sync-local-svn-working-copy.sh

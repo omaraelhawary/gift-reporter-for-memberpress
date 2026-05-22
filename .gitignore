@@ -43,3 +43,4 @@ access_log
 build/
 dist/
 svn-export/
+/memberpress-gift-reporter-svn/

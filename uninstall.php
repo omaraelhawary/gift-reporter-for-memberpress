@@ -20,6 +20,7 @@ delete_option( 'mpgr_version' );
 delete_option( 'mpgr_reminder_settings' );
 delete_option( 'mpgr_weekly_summary_settings' );
 delete_option( 'mpgr_cron_migrated_v1_6_3' );
+delete_option( 'mpgr_cron_migrated_v1_6_4' );
 delete_option( 'mpgr_legacy_cron_cleaned_v1_6_3' );
 
 // Clear scheduled cron events created by this plugin.
@@ -31,6 +32,7 @@ wp_clear_scheduled_hook( 'mpgr_cleanup_cache' );
 wp_clear_scheduled_hook( 'mpgr_check_reminders' );
 wp_clear_scheduled_hook( 'mpgr_send_reminder_emails' );
 wp_clear_scheduled_hook( 'mpgr_send_reminders' );
+wp_clear_scheduled_hook( 'mpgr_send_queued_gift_email' );
 
 // Delete tracking meta rows from mepr_transaction_meta.
 $mepr_meta_table = $wpdb->prefix . 'mepr_transaction_meta';

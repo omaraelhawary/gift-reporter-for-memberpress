@@ -22,6 +22,23 @@ class MPGR_Reminders {
 	 * Run scheduled reminders (called by WP-Cron)
 	 */
 	public static function run_scheduled_reminders() {
+		$lock_key = 'mpgr_reminders_lock';
+		if ( get_transient( $lock_key ) ) {
+			return;
+		}
+		set_transient( $lock_key, time(), 5 * MINUTE_IN_SECONDS );
+
+		try {
+			self::run_scheduled_reminders_work();
+		} finally {
+			delete_transient( $lock_key );
+		}
+	}
+
+	/**
+	 * Reminder cron worker (called under lock from run_scheduled_reminders).
+	 */
+	private static function run_scheduled_reminders_work() {
 		$settings = self::get_settings();
 		
 		if ( empty( $settings['enabled'] ) ) {
@@ -83,7 +100,7 @@ class MPGR_Reminders {
 		} else {
 			$cutoff_ts = time() - $min_delay_seconds;
 		}
-		$gifts = self::get_unclaimed_gifts( $cutoff_ts, 100 );
+		$gifts = self::get_unclaimed_gifts( $cutoff_ts, 100, count( $reminder_schedules ) );
 
 		foreach ( $gifts as $gift ) {
 			$sent_count = (int) self::get_reminder_meta( $gift->gift_transaction_id, '_mpgr_reminder_sent_count', 0 );
@@ -302,10 +319,18 @@ class MPGR_Reminders {
 	 * @param int $limit Maximum number of gifts to process per run
 	 * @return array Array of gift objects
 	 */
-	protected static function get_unclaimed_gifts( $cutoff_ts, $limit = 100 ) {
+	protected static function get_unclaimed_gifts( $cutoff_ts, $limit = 100, $max_reminders = 0 ) {
 		global $wpdb;
 
 		$cutoff_date = gmdate( 'Y-m-d H:i:s', $cutoff_ts );
+
+		$reminder_eligibility_sql = '';
+		if ( $max_reminders > 0 ) {
+			$reminder_eligibility_sql = $wpdb->prepare(
+				' AND ( sent_count_meta.meta_value IS NULL OR CAST(sent_count_meta.meta_value AS UNSIGNED) < %d )',
+				$max_reminders
+			);
+		}
 
 		$query = "
 		SELECT 
@@ -320,7 +345,6 @@ class MPGR_Reminders {
 		FROM 
 			{$wpdb->prefix}mepr_transactions AS gifter_txn
 			
-			-- Only include transactions with gift coupon metadata
 			INNER JOIN {$wpdb->prefix}mepr_transaction_meta AS coupon_meta 
 				ON gifter_txn.id = coupon_meta.transaction_id 
 				AND coupon_meta.meta_key = '_gift_coupon_id'
@@ -331,10 +355,13 @@ class MPGR_Reminders {
 			LEFT JOIN {$wpdb->posts} AS gift_coupon 
 				ON coupon_meta.meta_value = gift_coupon.ID
 			
-			-- Get gift status
 			LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS gift_status 
 				ON gifter_txn.id = gift_status.transaction_id 
 				AND gift_status.meta_key = '_gift_status'
+
+			LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS sent_count_meta
+				ON gifter_txn.id = sent_count_meta.transaction_id
+				AND sent_count_meta.meta_key = '_mpgr_reminder_sent_count'
 			
 		WHERE 
 			gifter_txn.status IN ('complete', 'confirmed')
@@ -343,9 +370,7 @@ class MPGR_Reminders {
 			AND COALESCE(gift_status.meta_value, 'unclaimed') = 'unclaimed'
 			AND gifter.user_email IS NOT NULL
 			AND gifter.user_email != ''
-
-		GROUP BY 
-			gifter_txn.id
+			{$reminder_eligibility_sql}
 
 		ORDER BY 
 			gifter_txn.created_at ASC

@@ -64,12 +64,6 @@ class MPGR_MemberPressGiftReporter {
 		register_activation_hook( __FILE__, array( $this, 'activate' ) );
 		register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
 
-		// Clean up orphaned cron hooks on every load (for existing installations)
-		$old_hooks = array( 'mpgr_check_reminders', 'mpgr_send_reminder_emails', 'mpgr_send_reminders' );
-		foreach ( $old_hooks as $hook ) {
-			wp_clear_scheduled_hook( $hook );
-		}
-
 		// Load reminders class and register hooks immediately
 		// This ensures the hooks are always available, even before plugins_loaded
 		if ( file_exists( MPGR_PLUGIN_PATH . 'includes/class-reminders.php' ) ) {
@@ -181,48 +175,13 @@ class MPGR_MemberPressGiftReporter {
      * Load the plugin
      */
 	public function load_plugin() {
+		$this->maybe_migrate_cron_state();
+
 		// Load the main report class.
 		require_once MPGR_PLUGIN_PATH . 'includes/class-gift-report.php';
 
 		// Initialize the report functionality.
 		new MPGR_Gift_Report();
-
-		// Ensure cron job is only scheduled if reminders are enabled
-		// This cleans up any orphaned cron jobs from before the fix
-		if ( class_exists( 'MPGR_Reminders' ) ) {
-			$settings = MPGR_Reminders::get_settings();
-			$timestamp = wp_next_scheduled( 'mpgr_run_gift_reminders' );
-			
-			if ( empty( $settings['enabled'] ) && $timestamp ) {
-				// Reminders are disabled but cron is scheduled - remove it
-				wp_unschedule_event( $timestamp, 'mpgr_run_gift_reminders' );
-				wp_clear_scheduled_hook( 'mpgr_run_gift_reminders' );
-			} elseif ( ! empty( $settings['enabled'] ) && ! $timestamp ) {
-				// Reminders are enabled but cron is not scheduled - schedule it
-				wp_schedule_event( time(), 'daily', 'mpgr_run_gift_reminders' );
-			}
-		}
-
-		// Load weekly summary class if not already loaded
-		if ( ! class_exists( 'MPGR_Weekly_Summary' ) && file_exists( MPGR_PLUGIN_PATH . 'includes/class-weekly-summary.php' ) ) {
-			require_once MPGR_PLUGIN_PATH . 'includes/class-weekly-summary.php';
-		}
-
-		// Ensure weekly summary cron is scheduled only if enabled
-		if ( class_exists( 'MPGR_Weekly_Summary' ) ) {
-			$weekly_summary_settings = MPGR_Weekly_Summary::get_settings();
-			$timestamp = wp_next_scheduled( 'mpgr_run_weekly_summary' );
-			
-			if ( ! empty( $weekly_summary_settings['enabled'] ) && ! $timestamp ) {
-				// Schedule weekly summary (runs every Monday at 9 AM)
-				$next_monday = strtotime( 'next Monday 9:00 AM' );
-				wp_schedule_event( $next_monday, 'weekly', 'mpgr_run_weekly_summary' );
-			} elseif ( empty( $weekly_summary_settings['enabled'] ) && $timestamp ) {
-				// Weekly summary is disabled but cron is scheduled - remove it
-				wp_unschedule_event( $timestamp, 'mpgr_run_weekly_summary' );
-				wp_clear_scheduled_hook( 'mpgr_run_weekly_summary' );
-			}
-		}
 
 		// Load admin functionality.
 		if ( is_admin() ) {
@@ -270,10 +229,11 @@ class MPGR_MemberPressGiftReporter {
 		if ( $timestamp ) {
 			wp_unschedule_event( $timestamp, 'mpgr_run_gift_reminders' );
 		}
-		
-		// Schedule reminder cron event
-		// Use wp_schedule_event which will add the event to the cron array
-		wp_schedule_event( time(), 'daily', 'mpgr_run_gift_reminders' );
+
+		$settings = MPGR_Reminders::get_settings();
+		if ( ! empty( $settings['enabled'] ) ) {
+			wp_schedule_event( time(), 'daily', 'mpgr_run_gift_reminders' );
+		}
 
 		// Schedule weekly summary cron event only if enabled (runs every Monday at 9 AM)
 		// By default, weekly summary is disabled, so we don't schedule it on activation
@@ -299,9 +259,54 @@ class MPGR_MemberPressGiftReporter {
 			wp_unschedule_event( $timestamp, 'mpgr_run_weekly_summary' );
 		}
 		wp_clear_scheduled_hook( 'mpgr_run_weekly_summary' );
+		wp_clear_scheduled_hook( 'mpgr_send_queued_gift_email' );
 
 		// Clean up if necessary.
 		flush_rewrite_rules();
+	}
+
+	/**
+	 * One-time cron reconciliation for upgrades (replaces per-request scheduling).
+	 */
+	private function maybe_migrate_cron_state() {
+		if ( get_option( 'mpgr_cron_migrated_v1_6_4' ) ) {
+			return;
+		}
+
+		foreach ( array( 'mpgr_check_reminders', 'mpgr_send_reminder_emails', 'mpgr_send_reminders' ) as $hook ) {
+			wp_clear_scheduled_hook( $hook );
+		}
+
+		if ( class_exists( 'MPGR_Reminders' ) ) {
+			$settings  = MPGR_Reminders::get_settings();
+			$timestamp = wp_next_scheduled( 'mpgr_run_gift_reminders' );
+
+			if ( empty( $settings['enabled'] ) && $timestamp ) {
+				wp_unschedule_event( $timestamp, 'mpgr_run_gift_reminders' );
+				wp_clear_scheduled_hook( 'mpgr_run_gift_reminders' );
+			} elseif ( ! empty( $settings['enabled'] ) && ! $timestamp ) {
+				wp_schedule_event( time(), 'daily', 'mpgr_run_gift_reminders' );
+			}
+		}
+
+		if ( ! class_exists( 'MPGR_Weekly_Summary' ) && file_exists( MPGR_PLUGIN_PATH . 'includes/class-weekly-summary.php' ) ) {
+			require_once MPGR_PLUGIN_PATH . 'includes/class-weekly-summary.php';
+		}
+
+		if ( class_exists( 'MPGR_Weekly_Summary' ) ) {
+			$weekly_settings = MPGR_Weekly_Summary::get_settings();
+			$timestamp       = wp_next_scheduled( 'mpgr_run_weekly_summary' );
+
+			if ( ! empty( $weekly_settings['enabled'] ) && ! $timestamp ) {
+				$next_monday = strtotime( 'next Monday 9:00 AM' );
+				wp_schedule_event( $next_monday, 'weekly', 'mpgr_run_weekly_summary' );
+			} elseif ( empty( $weekly_settings['enabled'] ) && $timestamp ) {
+				wp_unschedule_event( $timestamp, 'mpgr_run_weekly_summary' );
+				wp_clear_scheduled_hook( 'mpgr_run_weekly_summary' );
+			}
+		}
+
+		update_option( 'mpgr_cron_migrated_v1_6_4', 1, false );
 	}
 }
 

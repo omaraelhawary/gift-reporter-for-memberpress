@@ -481,7 +481,7 @@
 
         var $btn = $('#mpgr-bulk-send-emails');
         var originalText = $btn.text();
-        $btn.text('⏳ Sending...').prop('disabled', true);
+        $btn.text('⏳ Queuing...').prop('disabled', true);
 
         $.ajax({
             url: mpgr_ajax.ajax_url,
