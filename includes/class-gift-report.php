@@ -839,10 +839,14 @@ class MPGR_Gift_Report {
         // Build WHERE clause for filters
         $where_conditions = array();
         $where_conditions[] = "gifter_txn.status IN ('complete', 'confirmed', 'refunded')";
-        // FIXED: Only include actual gift purchase transactions, not claim transactions
-        $where_conditions[] = "(
-            (gift_meta.meta_key = '_gift_status' AND gift_meta.meta_value IN ('unclaimed', 'claimed'))
-            OR (gift_meta.meta_key = '_gift_coupon_id' AND gift_meta.meta_value IS NOT NULL)
+        // Only include actual gift purchase transactions (not claim transactions).
+        $where_conditions[] = "EXISTS (
+            SELECT 1 FROM {$wpdb->prefix}mepr_transaction_meta AS gift_meta_check
+            WHERE gift_meta_check.transaction_id = gifter_txn.id
+            AND (
+                (gift_meta_check.meta_key = '_gift_status' AND gift_meta_check.meta_value IN ('unclaimed', 'claimed'))
+                OR (gift_meta_check.meta_key = '_gift_coupon_id' AND gift_meta_check.meta_value IS NOT NULL AND gift_meta_check.meta_value != '')
+            )
         )";
         // FIXED: Exclude transactions that are gift claims (€0.00 transactions with gift metadata)
         $where_conditions[] = "gifter_txn.amount > 0";
@@ -984,11 +988,6 @@ class MPGR_Gift_Report {
         FROM 
             {$wpdb->prefix}mepr_transactions AS gifter_txn
             
-            -- Find transactions that have gift-related meta keys (only purchase transactions)
-            INNER JOIN {$wpdb->prefix}mepr_transaction_meta AS gift_meta 
-                ON gifter_txn.id = gift_meta.transaction_id 
-                AND gift_meta.meta_key IN ('_gift_status', '_gift_coupon_id')
-            
             LEFT JOIN {$wpdb->users} AS gifter 
                 ON gifter_txn.user_id = gifter.ID
             
@@ -1016,11 +1015,18 @@ class MPGR_Gift_Report {
                 ON gifter_txn.id = gift_status.transaction_id 
                 AND gift_status.meta_key = '_gift_status'
             
-            -- FIXED: Find redemption transaction for claimed gifts using coupon ID directly
-            -- This handles cases where coupons have been deleted
-            LEFT JOIN {$wpdb->prefix}mepr_transactions AS redemption_txn 
-                ON coupon_meta.meta_value = redemption_txn.coupon_id 
-                AND redemption_txn.status = 'complete'
+            -- Pick one redemption per coupon (earliest complete transaction) for ONLY_FULL_GROUP_BY safety.
+            LEFT JOIN (
+                SELECT coupon_id, MIN(id) AS id
+                FROM {$wpdb->prefix}mepr_transactions
+                WHERE status = 'complete'
+                AND coupon_id IS NOT NULL
+                AND coupon_id > 0
+                GROUP BY coupon_id
+            ) AS redemption_pick
+                ON coupon_meta.meta_value = redemption_pick.coupon_id
+            LEFT JOIN {$wpdb->prefix}mepr_transactions AS redemption_txn
+                ON redemption_txn.id = redemption_pick.id
                 AND redemption_txn.id != gifter_txn.id
             
             LEFT JOIN {$wpdb->users} AS recipient 
@@ -1037,9 +1043,6 @@ class MPGR_Gift_Report {
         WHERE 
             " . $where_clause . "
 
-        GROUP BY 
-            gifter_txn.id, gifter_txn.product_id
-
         ORDER BY 
             gifter_txn.created_at DESC
             " . $limit_clause . "
@@ -1051,6 +1054,27 @@ class MPGR_Gift_Report {
         return $this->report_data;
     }
     
+    /**
+     * Neutralize CSV/formula injection by prefixing values that begin with formula triggers.
+     *
+     * @param mixed $value Cell value.
+     * @return string Safe cell value.
+     */
+    private function csv_sanitize_cell( $value ) {
+        if ( ! is_scalar( $value ) ) {
+            return '';
+        }
+        $value = (string) $value;
+        if ( $value === '' ) {
+            return $value;
+        }
+        $first = $value[0];
+        if ( in_array( $first, array( '=', '+', '-', '@', "\t", "\r" ), true ) ) {
+            return "'" . $value;
+        }
+        return $value;
+    }
+
     /**
      * Export report to CSV with streaming for large datasets
      */
@@ -1112,7 +1136,8 @@ class MPGR_Gift_Report {
         );
         
         // Write headers
-        fputcsv($output, $headers, ',', '"', '\\');
+        $safe_headers = array_map( array( $this, 'csv_sanitize_cell' ), $headers );
+        fputcsv( $output, $safe_headers, ',', '"', '\\' );
         
         // Stream data in chunks to avoid memory issues
         $chunk_size = 1000;
@@ -1176,7 +1201,8 @@ class MPGR_Gift_Report {
                                 break;
                         }
                     }
-                    fputcsv($output, $translated_row, ',', '"', '\\');
+                    $safe_row = array_map( array( $this, 'csv_sanitize_cell' ), $translated_row );
+                    fputcsv( $output, $safe_row, ',', '"', '\\' );
                 }
             }
             
