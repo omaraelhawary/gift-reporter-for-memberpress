@@ -270,6 +270,8 @@ class MPGR_Reminders {
 			'delay_days'        => 7,
 			'max_reminders'     => 2,
 			'send_to_gifter'    => true,
+			'from_name'         => '',
+			'from_email'        => '',
 			'email_subject'          => '',
 			'email_body'             => '',
 			'gifter_email_subject'  => '',
@@ -288,6 +290,24 @@ class MPGR_Reminders {
 		}
 		
 		return $settings;
+	}
+
+	/**
+	 * HTML email headers including From name and address from settings.
+	 *
+	 * @return array Email headers for wp_mail().
+	 */
+	public static function get_email_headers() {
+		$settings   = self::get_settings();
+		$from_name  = ! empty( $settings['from_name'] ) ? $settings['from_name'] : get_bloginfo( 'name' );
+		$from_email = ( ! empty( $settings['from_email'] ) && is_email( $settings['from_email'] ) )
+			? $settings['from_email']
+			: get_option( 'admin_email' );
+
+		return array(
+			'Content-Type: text/html; charset=UTF-8',
+			'From: ' . $from_name . ' <' . $from_email . '>',
+		);
 	}
 
 	/**
@@ -459,11 +479,7 @@ class MPGR_Reminders {
 			'user_last_name'  => $user_last_name,
 		);
 
-		// Set headers for HTML email (MemberPress style)
-		$headers = array(
-			'Content-Type: text/html; charset=UTF-8',
-			'From: ' . $blogname . ' <' . get_option( 'admin_email' ) . '>',
-		);
+		$headers = self::get_email_headers();
 
 		// Send to gifter if enabled
 		if ( ! empty( $settings['send_to_gifter'] ) && ! empty( $gift->gifter_email ) && is_email( $gift->gifter_email ) ) {

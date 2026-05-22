@@ -166,10 +166,7 @@ class MPGR_Weekly_Summary {
 			get_bloginfo( 'name' )
 		);
 		
-		$headers = array(
-			'Content-Type: text/html; charset=UTF-8',
-			'From: ' . get_bloginfo( 'name' ) . ' <' . $admin_email . '>',
-		);
+		$headers = MPGR_Reminders::get_email_headers();
 		
 		wp_mail( $admin_email, $subject, $email_content, $headers );
 	}

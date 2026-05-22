@@ -292,28 +292,153 @@
     background-color: #fff8e1;
 }
 
-.mpgr-table {
-    border-collapse: collapse;
+.mpgr-table-wrap {
     width: 100%;
     margin-top: 20px;
-    font-size: 14px;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.mpgr-table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 4px;
+}
+
+.mpgr-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
     background: white;
+    min-width: 1280px;
 }
 
 .mpgr-table th,
 .mpgr-table td {
-    border: 1px solid #ddd;
-    padding: 10px;
+    border: 1px solid #dcdcde;
+    padding: 12px;
     text-align: left;
-    vertical-align: top;
+    vertical-align: middle;
 }
 
-.mpgr-table th {
-    background-color: #0073aa;
-    color: white;
-    font-weight: bold;
-    position: sticky;
-    top: 0;
+.mpgr-table thead th {
+    background-color: #2271b1;
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+/* Beat wp-admin link colors inside the blue header row */
+#wpbody-content .mpgr-gift-report .mpgr-table thead th,
+#wpbody-content .mpgr-gift-report .mpgr-table thead th a,
+#wpbody-content .mpgr-gift-report .mpgr-table thead th a:visited,
+#wpbody-content .mpgr-gift-report .mpgr-table thead th a:hover,
+#wpbody-content .mpgr-gift-report .mpgr-table thead th a:focus {
+    color: #fff;
+    box-shadow: none;
+}
+
+#wpbody-content .mpgr-gift-report .mpgr-table thead th a {
+    text-decoration: none;
+    font-weight: 600;
+}
+
+#wpbody-content .mpgr-gift-report .mpgr-table thead th a:hover,
+#wpbody-content .mpgr-gift-report .mpgr-table thead th a:focus {
+    text-decoration: underline;
+    color: #fff;
+}
+
+.mpgr-presets {
+    margin: 0 0 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.mpgr-result-count {
+    margin: 12px 0;
+    color: #50575e;
+}
+
+.mpgr-table thead th[aria-sort="ascending"] .mpgr-sort-link::after,
+.mpgr-table thead th[aria-sort="descending"] .mpgr-sort-link::after {
+    margin-left: 4px;
+    font-size: 10px;
+    opacity: 0.9;
+}
+
+.mpgr-table thead th[aria-sort="ascending"] .mpgr-sort-link::after {
+    content: "▲";
+}
+
+.mpgr-table thead th[aria-sort="descending"] .mpgr-sort-link::after {
+    content: "▼";
+}
+
+#wpbody-content .mpgr-gift-report .mpgr-table tbody td {
+    color: #1d2327;
+}
+
+#wpbody-content .mpgr-gift-report .mpgr-table tbody td a,
+#wpbody-content .mpgr-gift-report .mpgr-table tbody td a:visited {
+    color: #2271b1;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+#wpbody-content .mpgr-gift-report .mpgr-table tbody td a:hover,
+#wpbody-content .mpgr-gift-report .mpgr-table tbody td a:focus {
+    color: #135e96;
+    text-decoration: underline;
+}
+
+.mpgr-table .mpgr-col-nowrap {
+    white-space: nowrap;
+}
+
+.mpgr-table .mpgr-col-email {
+    min-width: 200px;
+    max-width: 240px;
+    word-break: break-word;
+}
+
+.mpgr-table .mpgr-col-coupon {
+    min-width: 150px;
+    max-width: 200px;
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.mpgr-table .mpgr-col-product {
+    min-width: 130px;
+}
+
+.mpgr-table .mpgr-col-id {
+    min-width: 110px;
+    white-space: nowrap;
+}
+
+.mpgr-table .mpgr-col-actions {
+    white-space: nowrap;
+    width: 72px;
+    text-align: center;
+}
+
+.mpgr-table .mpgr-checkbox-col {
+    width: 36px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.mpgr-pagination {
+    margin-top: 16px;
 }
 
 .mpgr-table tr:nth-child(even) {
@@ -667,10 +792,12 @@
 }
 
 @media (max-width: 480px) {
+    .mpgr-table-wrap {
+        margin-top: 16px;
+    }
+
     .mpgr-table {
-        display: block;
-        overflow-x: auto;
-        white-space: nowrap;
+        min-width: 1100px;
     }
     
     .mpgr-export-btn {

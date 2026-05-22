@@ -185,6 +185,8 @@ class MPGR_Admin {
 			'send_to_gifter'         => $enabled ? true : false,
 			'gifter_email_subject'  => isset( $_POST['mpgr_gifter_email_subject'] ) ? sanitize_text_field( wp_unslash( $_POST['mpgr_gifter_email_subject'] ) ) : '',
 			'gifter_email_body'      => isset( $_POST['mpgr_gifter_email_body'] ) ? wp_kses_post( wp_unslash( $_POST['mpgr_gifter_email_body'] ) ) : '',
+			'from_name'              => isset( $_POST['mpgr_from_name'] ) ? sanitize_text_field( wp_unslash( $_POST['mpgr_from_name'] ) ) : '',
+			'from_email'             => isset( $_POST['mpgr_from_email'] ) ? sanitize_email( wp_unslash( $_POST['mpgr_from_email'] ) ) : '',
 			// Backward compatibility
 			'email_subject'          => isset( $_POST['mpgr_reminder_email_subject'] ) ? sanitize_text_field( wp_unslash( $_POST['mpgr_reminder_email_subject'] ) ) : '',
 			'email_body'             => isset( $_POST['mpgr_reminder_email_body'] ) ? wp_kses_post( wp_unslash( $_POST['mpgr_reminder_email_body'] ) ) : '',
@@ -594,6 +596,28 @@ class MPGR_Admin {
 
 						<tr>
 							<th scope="row">
+								<label for="mpgr_from_name">
+									<?php esc_html_e( 'From Name', 'memberpress-gift-reporter' ); ?>
+								</label>
+							</th>
+							<td>
+								<input type="text" id="mpgr_from_name" name="mpgr_from_name" value="<?php echo esc_attr( $settings['from_name'] ?? '' ); ?>" class="regular-text" placeholder="<?php echo esc_attr( get_bloginfo( 'name' ) ); ?>">
+								<p class="description"><?php esc_html_e( 'Leave blank to use your site name.', 'memberpress-gift-reporter' ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">
+								<label for="mpgr_from_email">
+									<?php esc_html_e( 'From Email', 'memberpress-gift-reporter' ); ?>
+								</label>
+							</th>
+							<td>
+								<input type="email" id="mpgr_from_email" name="mpgr_from_email" value="<?php echo esc_attr( $settings['from_email'] ?? '' ); ?>" class="regular-text" placeholder="<?php echo esc_attr( get_option( 'admin_email' ) ); ?>">
+								<p class="description"><?php esc_html_e( 'Leave blank to use the WordPress admin email. Used for reminders, resends, bulk send, and weekly summary.', 'memberpress-gift-reporter' ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">
 								<label for="mpgr_gifter_email_subject">
 									<?php esc_html_e( 'Email Subject', 'memberpress-gift-reporter' ); ?>
 								</label>
@@ -749,11 +773,7 @@ class MPGR_Admin {
 		$footer_content = MPGR_Reminders::get_email_footer( $test_variables );
 		$email_body = $header_content . $email_body . $footer_content;
 
-		// Set headers for HTML email
-		$headers = array(
-			'Content-Type: text/html; charset=UTF-8',
-			'From: ' . get_bloginfo( 'name' ) . ' <' . get_option( 'admin_email' ) . '>',
-		);
+		$headers = MPGR_Reminders::get_email_headers();
 
 		// Replace subject variables
 		$subject = MPGR_Reminders::replace_email_variables( $email_subject, $test_variables );

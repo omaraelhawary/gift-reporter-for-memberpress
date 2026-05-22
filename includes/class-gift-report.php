@@ -309,12 +309,7 @@ class MPGR_Gift_Report {
             );
         }
 
-        $headers = array(
-            'Content-Type: text/html; charset=UTF-8',
-            'From: ' . get_bloginfo( 'name' ) . ' <' . get_option( 'admin_email' ) . '>',
-        );
-
-        $sent = wp_mail( $gifter_email, $subject, $message, $headers );
+        $sent = wp_mail( $gifter_email, $subject, $message, MPGR_Reminders::get_email_headers() );
 
         if ( ! $sent ) {
             return array( 'success' => false, 'error' => 'send_failed' );
@@ -635,7 +630,7 @@ class MPGR_Gift_Report {
     public function rest_get_report( $request ) {
         try {
             $filters = self::sanitize_filters( $request );
-            $data    = $this->generate_report( 1000, 0, $filters );
+            $data    = $this->generate_report( 1000, 0, $filters, $this->get_default_sort_clause() );
             $summary = $this->get_summary( $filters );
 
             return array(
@@ -879,13 +874,239 @@ class MPGR_Gift_Report {
             LEFT JOIN {$wpdb->usermeta} AS recipient_lname
                 ON recipient.ID = recipient_lname.user_id
                 AND recipient_lname.meta_key = 'last_name'
+
+            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS reminder_count_meta
+                ON gifter_txn.id = reminder_count_meta.transaction_id
+                AND reminder_count_meta.meta_key = '_mpgr_reminder_sent_count'
+
+            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS reminder_ts_meta
+                ON gifter_txn.id = reminder_ts_meta.transaction_id
+                AND reminder_ts_meta.meta_key = '_mpgr_last_reminder_ts'
         ";
+    }
+
+    /**
+     * Default ORDER BY for report queries (CSV export and fallback).
+     *
+     * @return string SQL ORDER BY clause.
+     */
+    private function get_default_sort_clause() {
+        return ' ORDER BY gifter_txn.created_at DESC ';
+    }
+
+    /**
+     * ORDER BY from allow-listed admin sort parameters.
+     *
+     * @return string SQL ORDER BY clause.
+     */
+    private function get_sort_clause() {
+        $allowed = array(
+            'gift_transaction_id' => 'gifter_txn.id',
+            'gift_purchase_date'  => 'gifter_txn.created_at',
+            'gift_total'          => 'gifter_txn.total',
+            'product_name'        => 'gift_product.post_title',
+            'gift_status'         => "COALESCE(gift_status.meta_value, 'unclaimed')",
+            'redemption_date'     => 'redemption_txn.created_at',
+            'reminders_sent'      => 'CAST(COALESCE(reminder_count_meta.meta_value, 0) AS UNSIGNED)',
+        );
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only sort on admin report screen.
+        $orderby_key = isset( $_GET['orderby'] ) ? sanitize_key( wp_unslash( $_GET['orderby'] ) ) : 'gift_purchase_date';
+        $order       = ( isset( $_GET['order'] ) && 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_GET['order'] ) ) ) ) ? 'ASC' : 'DESC';
+
+        $orderby_sql = isset( $allowed[ $orderby_key ] ) ? $allowed[ $orderby_key ] : $allowed['gift_purchase_date'];
+
+        return ' ORDER BY ' . $orderby_sql . ' ' . $order . ' ';
+    }
+
+    /**
+     * Build admin URL for report list with filters, sort, and pagination preserved.
+     *
+     * @param array $filters     Active filters.
+     * @param array $extra_args  Additional query args.
+     * @return string Admin URL.
+     */
+    private function get_report_page_url( $filters = array(), $extra_args = array() ) {
+        $args = array_merge(
+            array(
+                'page'     => 'memberpress-gift-report',
+                '_wpnonce' => wp_create_nonce( 'mpgr_filter_nonce' ),
+            ),
+            $filters,
+            $extra_args
+        );
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        if ( ! empty( $_GET['orderby'] ) ) {
+            $args['orderby'] = sanitize_key( wp_unslash( $_GET['orderby'] ) );
+        }
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        if ( ! empty( $_GET['order'] ) ) {
+            $args['order'] = sanitize_text_field( wp_unslash( $_GET['order'] ) );
+        }
+
+        return add_query_arg( $args, admin_url( 'admin.php' ) );
+    }
+
+    /**
+     * Build admin URLs for entities shown in the report.
+     *
+     * @param string $type One of: transaction, user, product, coupon.
+     * @param int    $id   Entity ID.
+     * @return string Escaped URL, or empty string.
+     */
+    private function admin_link_url( $type, $id ) {
+        $id = (int) $id;
+        if ( $id <= 0 ) {
+            return '';
+        }
+
+        switch ( $type ) {
+            case 'transaction':
+                return esc_url( admin_url( 'admin.php?page=memberpress-trans&action=edit&id=' . $id ) );
+            case 'user':
+                return esc_url( admin_url( 'user-edit.php?user_id=' . $id ) );
+            case 'product':
+            case 'coupon':
+                return esc_url( admin_url( 'post.php?post=' . $id . '&action=edit' ) );
+            default:
+                return '';
+        }
+    }
+
+    /**
+     * Wrap a label in a link to the entity admin page.
+     *
+     * @param string $label Display text.
+     * @param string $type  Entity type for admin_link_url().
+     * @param int    $id    Entity ID.
+     * @return string HTML (pre-escaped).
+     */
+    private function admin_link( $label, $type, $id ) {
+        $url = $this->admin_link_url( $type, $id );
+        if ( '' === $url ) {
+            return esc_html( $label );
+        }
+
+        return '<a href="' . $url . '">' . esc_html( $label ) . '</a>';
+    }
+
+    /**
+     * Render a sortable table column header.
+     *
+     * @param string $label          Column label.
+     * @param string $column_key     Sort key.
+     * @param array  $filters        Active filters.
+     * @param string $current_orderby Active orderby key.
+     * @param string $current_order   Active order (ASC|DESC).
+     */
+    private function render_sortable_column_header( $label, $column_key, $filters, $current_orderby, $current_order ) {
+        $sortable = array(
+            'gift_transaction_id',
+            'gift_purchase_date',
+            'gift_total',
+            'product_name',
+            'gift_status',
+            'redemption_date',
+            'reminders_sent',
+        );
+
+        $th_class   = $this->get_table_column_class( $column_key );
+        $class_attr = '' !== $th_class ? ' class="' . esc_attr( $th_class ) . '"' : '';
+
+        if ( ! in_array( $column_key, $sortable, true ) ) {
+            echo '<th' . $class_attr . '>' . esc_html( $label ) . '</th>';
+            return;
+        }
+
+        $is_active  = ( $current_orderby === $column_key );
+        $next_order = ( $is_active && 'DESC' === $current_order ) ? 'ASC' : 'DESC';
+        $url        = $this->get_report_page_url(
+            $filters,
+            array(
+                'orderby' => $column_key,
+                'order'   => $next_order,
+                'paged'   => 1,
+            )
+        );
+        $aria_sort  = $is_active ? ( 'ASC' === $current_order ? 'ascending' : 'descending' ) : 'none';
+
+        echo '<th' . $class_attr . ' aria-sort="' . esc_attr( $aria_sort ) . '"><a href="' . esc_url( $url ) . '" class="mpgr-sort-link">' . esc_html( $label ) . '</a></th>';
+    }
+
+    /**
+     * CSS class for table column layout by sort/filter key.
+     *
+     * @param string $column_key Column identifier.
+     * @return string Space-separated class names.
+     */
+    private function get_table_column_class( $column_key ) {
+        $map = array(
+            'gift_transaction_id' => 'mpgr-col-id',
+            'gift_purchase_date'  => 'mpgr-col-nowrap',
+            'gift_total'          => 'mpgr-col-nowrap',
+            'gift_status'         => 'mpgr-col-nowrap',
+            'redemption_date'     => 'mpgr-col-nowrap',
+            'reminders_sent'      => 'mpgr-col-nowrap',
+            'product_name'        => 'mpgr-col-product',
+        );
+
+        return isset( $map[ $column_key ] ) ? $map[ $column_key ] : '';
+    }
+
+    /**
+     * Output quick-filter preset buttons.
+     *
+     * @param array $filters Active filters (unused; presets replace filters).
+     */
+    private function render_filter_presets() {
+        $presets = array(
+            array(
+                'label' => __( 'Unclaimed > 7 days', 'memberpress-gift-reporter' ),
+                'args'  => array(
+                    'gift_status' => 'unclaimed',
+                    'date_to'     => gmdate( 'Y-m-d', strtotime( '-7 days' ) ),
+                ),
+            ),
+            array(
+                'label' => __( 'This month', 'memberpress-gift-reporter' ),
+                'args'  => array(
+                    'date_from' => gmdate( 'Y-m-01' ),
+                    'date_to'   => gmdate( 'Y-m-d' ),
+                ),
+            ),
+            array(
+                'label' => __( 'Claimed last 30 days', 'memberpress-gift-reporter' ),
+                'args'  => array(
+                    'gift_status'      => 'claimed',
+                    'redemption_from'  => gmdate( 'Y-m-d', strtotime( '-30 days' ) ),
+                ),
+            ),
+        );
+
+        echo '<div class="mpgr-presets">';
+        foreach ( $presets as $preset ) {
+            $url = $this->get_report_page_url( $preset['args'] );
+            echo '<a href="' . esc_url( $url ) . '" class="button">' . esc_html( $preset['label'] ) . '</a> ';
+        }
+        echo '</div>';
+    }
+
+    /**
+     * Count rows matching filters (uses summary aggregation).
+     *
+     * @param array $filters Active filters.
+     * @return int Total matching gifts.
+     */
+    private function count_report_rows( $filters = array() ) {
+        $summary = $this->get_summary( $filters );
+        return (int) $summary['total_gifts'];
     }
 
     /**
      * Generate the gift report data
      */
-    public function generate_report($limit = 1000, $offset = 0, $filters = array()) {
+    public function generate_report( $limit = 1000, $offset = 0, $filters = array(), $sort_clause = null ) {
         global $wpdb;
 
         $where_conditions = $this->build_where_conditions( $filters );
@@ -943,17 +1164,17 @@ class MPGR_Gift_Report {
             CASE 
                 WHEN gifter.ID IS NULL THEN 'Deleted'
                 ELSE 'Active'
-            END AS gifter_status
+            END AS gifter_status,
+
+            COALESCE(reminder_count_meta.meta_value, 0) AS reminders_sent,
+            reminder_ts_meta.meta_value AS last_reminder_ts
 
         FROM 
             {$wpdb->prefix}mepr_transactions AS gifter_txn
             " . $this->get_report_joins_sql() . "
         WHERE 
             " . $where_clause . "
-
-        ORDER BY 
-            gifter_txn.created_at DESC
-            " . $limit_clause . "
+        " . ( null !== $sort_clause ? $sort_clause : $this->get_default_sort_clause() ) . $limit_clause . "
         ";
         
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dynamic query with properly prepared WHERE conditions and LIMIT clause. All user inputs are sanitized and prepared via $wpdb->prepare() before being added to $where_conditions array and $limit_clause. This is a false positive - the query is safe because all dynamic values are properly escaped.
@@ -1040,7 +1261,9 @@ class MPGR_Gift_Report {
             __( 'Recipient First Name', 'memberpress-gift-reporter' ),
             __( 'Recipient Last Name', 'memberpress-gift-reporter' ),
             __( 'Gift Status Display', 'memberpress-gift-reporter' ),
-            __( 'Gifter Status', 'memberpress-gift-reporter' )
+            __( 'Gifter Status', 'memberpress-gift-reporter' ),
+            __( 'Reminders Sent', 'memberpress-gift-reporter' ),
+            __( 'Last Reminder', 'memberpress-gift-reporter' ),
         );
         
         // Write headers
@@ -1052,7 +1275,7 @@ class MPGR_Gift_Report {
         $offset = 0;
         
         do {
-            $data = $this->generate_report($chunk_size, $offset, $filters);
+            $data = $this->generate_report( $chunk_size, $offset, $filters, $this->get_default_sort_clause() );
             
             if (!empty($data)) {
                 foreach ($data as $row) {
@@ -1233,11 +1456,21 @@ class MPGR_Gift_Report {
      * Display the report
      */
     public function display_report($filters = array()) {
-        if (empty($this->report_data)) {
-            $this->generate_report(0, 0, $filters);
-        }
-        
-        $summary = $this->get_summary($filters);
+        $per_page     = 50;
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $current_page = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1;
+        $offset       = ( $current_page - 1 ) * $per_page;
+        $sort_clause  = $this->get_sort_clause();
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $current_orderby = isset( $_GET['orderby'] ) ? sanitize_key( wp_unslash( $_GET['orderby'] ) ) : 'gift_purchase_date';
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $current_order   = ( isset( $_GET['order'] ) && 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_GET['order'] ) ) ) ) ? 'ASC' : 'DESC';
+
+        $total_rows  = $this->count_report_rows( $filters );
+        $total_pages = $total_rows > 0 ? (int) ceil( $total_rows / $per_page ) : 1;
+
+        $this->generate_report( $per_page, $offset, $filters, $sort_clause );
+        $summary = $this->get_summary( $filters );
         
         // Styles are enqueued via admin_enqueue_scripts hook in class-admin.php
         // Note: Inline styles in email templates (get_fallback_email_template, get_email_header, etc.)
@@ -1246,6 +1479,8 @@ class MPGR_Gift_Report {
         		echo '<div class="mpgr-gift-report">';
 		echo '<h2>🎁 ' . esc_html__( 'MemberPress Gift Report', 'memberpress-gift-reporter' ) . '</h2>';
 		
+		$this->render_filter_presets();
+
 		// Filter form
 		echo '<div class="mpgr-filters">';
 		echo '<h3>🔍 ' . esc_html__( 'Filters', 'memberpress-gift-reporter' ) . '</h3>';
@@ -1416,6 +1651,18 @@ class MPGR_Gift_Report {
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Claim Rate:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['claim_rate']) . '%</span>';
 		echo '</div>';
         echo '</div>';
+
+		if ( $total_rows > 0 ) {
+			echo '<p class="mpgr-result-count">';
+			printf(
+				/* translators: 1: first row number, 2: last row number, 3: total rows */
+				esc_html__( 'Showing %1$d–%2$d of %3$d gifts', 'memberpress-gift-reporter' ),
+				min( $offset + 1, $total_rows ),
+				min( $offset + $per_page, $total_rows ),
+				$total_rows
+			);
+			echo '</p>';
+		}
         
         		// Export button
 		echo '<a href="#" class="mpgr-export-btn">&#128229; ' . esc_html__( 'Download CSV Report', 'memberpress-gift-reporter' ) . '</a>';
@@ -1441,24 +1688,27 @@ class MPGR_Gift_Report {
                 echo '</div>';
             }
             
-            			echo '<table class="mpgr-table">';
+			echo '<div class="mpgr-table-wrap">';
+			echo '<div class="mpgr-table-scroll">';
+			echo '<table class="mpgr-table">';
 			echo '<thead>';
 			echo '<tr>';
 			if ($unclaimed_count > 0) {
 				echo '<th class="mpgr-checkbox-col"><input type="checkbox" id="mpgr-select-all-header" title="' . esc_attr__( 'Select all unclaimed gifts', 'memberpress-gift-reporter' ) . '"></th>';
 			}
-			echo '<th>' . esc_html__( 'Gift ID', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Transaction ID', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Purchase Date', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Gifter Email', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Product', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Coupon Code', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Status', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Recipient Email', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Claim Transaction ID', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Redemption Date', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Amount', 'memberpress-gift-reporter' ) . '</th>';
-			echo '<th>' . esc_html__( 'Actions', 'memberpress-gift-reporter' ) . '</th>';
+			$this->render_sortable_column_header( __( 'Gift ID', 'memberpress-gift-reporter' ), 'gift_transaction_id', $filters, $current_orderby, $current_order );
+			$this->render_sortable_column_header( __( 'Transaction ID', 'memberpress-gift-reporter' ), 'gift_transaction_id', $filters, $current_orderby, $current_order );
+			$this->render_sortable_column_header( __( 'Purchase Date', 'memberpress-gift-reporter' ), 'gift_purchase_date', $filters, $current_orderby, $current_order );
+			echo '<th class="mpgr-col-email">' . esc_html__( 'Gifter Email', 'memberpress-gift-reporter' ) . '</th>';
+			$this->render_sortable_column_header( __( 'Product', 'memberpress-gift-reporter' ), 'product_name', $filters, $current_orderby, $current_order );
+			echo '<th class="mpgr-col-coupon">' . esc_html__( 'Coupon Code', 'memberpress-gift-reporter' ) . '</th>';
+			$this->render_sortable_column_header( __( 'Status', 'memberpress-gift-reporter' ), 'gift_status', $filters, $current_orderby, $current_order );
+			echo '<th class="mpgr-col-email">' . esc_html__( 'Recipient Email', 'memberpress-gift-reporter' ) . '</th>';
+			echo '<th class="mpgr-col-id">' . esc_html__( 'Claim Transaction ID', 'memberpress-gift-reporter' ) . '</th>';
+			$this->render_sortable_column_header( __( 'Redemption Date', 'memberpress-gift-reporter' ), 'redemption_date', $filters, $current_orderby, $current_order );
+			$this->render_sortable_column_header( __( 'Amount', 'memberpress-gift-reporter' ), 'gift_total', $filters, $current_orderby, $current_order );
+			$this->render_sortable_column_header( __( 'Reminders Sent', 'memberpress-gift-reporter' ), 'reminders_sent', $filters, $current_orderby, $current_order );
+			echo '<th class="mpgr-col-actions">' . esc_html__( 'Actions', 'memberpress-gift-reporter' ) . '</th>';
 			echo '</tr>';
 			echo '</thead>';
             echo '<tbody>';
@@ -1490,19 +1740,20 @@ class MPGR_Gift_Report {
                     }
                 }
                 
-                echo '<td>' . esc_html($row['gift_transaction_id']) . '</td>';
-                echo '<td>' . esc_html($row['gift_transaction_number']) . '</td>';
-                echo '<td>' . esc_html($row['gift_purchase_date']) . '</td>';
-                if ($row['gifter_email'] === 'Deleted User') {
-                    echo '<td><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
+                // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
+                echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_id'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
+                echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_number'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
+                echo '<td class="mpgr-col-nowrap">' . esc_html( $row['gift_purchase_date'] ) . '</td>';
+                if ( $row['gifter_email'] === 'Deleted User' ) {
+                    echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
                 } else {
-                    echo '<td>' . esc_html($row['gifter_email']) . '</td>';
+                    echo '<td class="mpgr-col-email">' . $this->admin_link( $row['gifter_email'], 'user', $row['gifter_user_id'] ) . '</td>';
                 }
-                echo '<td>' . esc_html($row['product_name']) . '</td>';
-                if ($row['coupon_code'] === 'Deleted Coupon') {
-                    echo '<td><span class="mpgr-deleted-coupon">' . esc_html__( 'Deleted Coupon', 'memberpress-gift-reporter' ) . '</span></td>';
+                echo '<td class="mpgr-col-product">' . $this->admin_link( $row['product_name'], 'product', $row['product_id'] ) . '</td>';
+                if ( $row['coupon_code'] === 'Deleted Coupon' ) {
+                    echo '<td class="mpgr-col-coupon"><span class="mpgr-deleted-coupon">' . esc_html__( 'Deleted Coupon', 'memberpress-gift-reporter' ) . '</span></td>';
                 } else {
-                    echo '<td>' . esc_html($row['coupon_code']) . '</td>';
+                    echo '<td class="mpgr-col-coupon">' . $this->admin_link( $row['coupon_code'], 'coupon', (int) $row['coupon_id'] ) . '</td>';
                 }
                 // Translate status display
                 $status_display = $row['gift_status_display'];
@@ -1520,24 +1771,36 @@ class MPGR_Gift_Report {
                         $status_display = esc_html__( 'Unknown', 'memberpress-gift-reporter' );
                         break;
                 }
-                echo '<td class="' . esc_attr($status_class) . '">' . esc_html($status_display) . '</td>';
-                if ($row['gift_status'] === 'claimed') {
-                    if ($row['recipient_email'] === 'Deleted User') {
-                        echo '<td><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
+                echo '<td class="mpgr-col-nowrap ' . esc_attr( $status_class ) . '">' . esc_html( $status_display ) . '</td>';
+                if ( $row['gift_status'] === 'claimed' ) {
+                    if ( $row['recipient_email'] === 'Deleted User' ) {
+                        echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
                     } else {
-                        echo '<td>' . esc_html($row['recipient_email']) . '</td>';
+                        echo '<td class="mpgr-col-email">' . $this->admin_link( $row['recipient_email'], 'user', $row['recipient_user_id'] ) . '</td>';
                     }
-                    echo '<td>' . esc_html($row['redemption_transaction_number'] ?: esc_html__( 'N/A', 'memberpress-gift-reporter' )) . '</td>';
-                    echo '<td>' . esc_html($row['redemption_date'] ?: esc_html__( 'N/A', 'memberpress-gift-reporter' )) . '</td>';
+                    $claim_label = $row['redemption_transaction_number'] ? $row['redemption_transaction_number'] : __( 'N/A', 'memberpress-gift-reporter' );
+                    echo '<td class="mpgr-col-id">' . $this->admin_link( $claim_label, 'transaction', (int) $row['redemption_transaction_id'] ) . '</td>';
+                    echo '<td class="mpgr-col-nowrap">' . esc_html( $row['redemption_date'] ? $row['redemption_date'] : __( 'N/A', 'memberpress-gift-reporter' ) ) . '</td>';
                 } else {
-                    echo '<td>' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
-                    echo '<td>' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
-                    echo '<td>' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
+                    echo '<td class="mpgr-col-email">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
+                    echo '<td class="mpgr-col-id">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
+                    echo '<td class="mpgr-col-nowrap">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
                 }
-                echo '<td>' . esc_html($this->format_currency($row['gift_total'])) . '</td>';
-                
+                echo '<td class="mpgr-col-nowrap">' . esc_html( $this->format_currency( $row['gift_total'] ) ) . '</td>';
+
+                $reminders_sent = (int) $row['reminders_sent'];
+                $last_ts        = (int) $row['last_reminder_ts'];
+                $tooltip        = $last_ts
+                    ? sprintf(
+                        /* translators: %s: formatted datetime */
+                        esc_attr__( 'Last sent: %s', 'memberpress-gift-reporter' ),
+                        gmdate( 'Y-m-d H:i', $last_ts )
+                    )
+                    : '';
+                echo '<td class="mpgr-col-nowrap"' . ( $tooltip ? ' title="' . esc_attr( $tooltip ) . '"' : '' ) . '>' . esc_html( $reminders_sent ) . '</td>';
+
                 // Actions column
-                echo '<td class="mpgr-actions">';
+                echo '<td class="mpgr-actions mpgr-col-actions">';
                 // Show resend email button
                 echo '<button class="mpgr-action-btn mpgr-resend-email" data-gift-id="' . esc_attr($row['gift_transaction_id']) . '" title="' . esc_attr__( 'Resend gift email to gifter', 'memberpress-gift-reporter' ) . '">📧</button>';
                 // Show copy link button - include redemption link as data attribute for Safari compatibility
@@ -1553,9 +1816,28 @@ class MPGR_Gift_Report {
             
             echo '</tbody>';
             echo '</table>';
+			echo '</div>';
+			echo '</div>';
+
+            if ( $total_pages > 1 ) {
+                $pagination = paginate_links(
+                    array(
+                        'base'      => $this->get_report_page_url( $filters, array( 'paged' => '%#%' ) ),
+                        'format'    => '',
+                        'current'   => $current_page,
+                        'total'     => $total_pages,
+                        'prev_text' => __( '&laquo; Previous', 'memberpress-gift-reporter' ),
+                        'next_text' => __( 'Next &raquo;', 'memberpress-gift-reporter' ),
+                        'type'      => 'list',
+                    )
+                );
+                if ( $pagination ) {
+                    echo '<div class="mpgr-pagination tablenav"><div class="tablenav-pages">' . wp_kses_post( $pagination ) . '</div></div>';
+                }
+            }
         } else {
             // Check if there are any gift transactions at all (without filters)
-            $all_gifts = $this->generate_report(0, 0, array());
+            $all_gifts = $this->generate_report( 1, 0, array(), $this->get_default_sort_clause() );
             
             if (!empty($all_gifts)) {
                 // There are gift transactions, but filters are too restrictive
