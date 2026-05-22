@@ -139,38 +139,8 @@ class MPGR_Admin {
 		if ( 'reminders' === $current_tab ) {
 			$this->display_reminder_settings_tab();
 		} else {
-			// Get filter parameters for report tab (only after nonce verification)
-			$filters = array();
-			if ( ! empty( $_GET['date_from'] ) ) {
-				$filters['date_from'] = sanitize_text_field( wp_unslash( $_GET['date_from'] ) );
-			}
-			if ( ! empty( $_GET['date_to'] ) ) {
-				$filters['date_to'] = sanitize_text_field( wp_unslash( $_GET['date_to'] ) );
-			}
-			if ( ! empty( $_GET['gift_status'] ) ) {
-				$filters['gift_status'] = sanitize_text_field( wp_unslash( $_GET['gift_status'] ) );
-			}
-			if ( ! empty( $_GET['product'] ) ) {
-				$filters['product'] = intval( $_GET['product'] );
-			}
-			if ( ! empty( $_GET['gifter_email'] ) ) {
-				$filters['gifter_email'] = sanitize_email( wp_unslash( $_GET['gifter_email'] ) );
-			}
-			if ( ! empty( $_GET['recipient_email'] ) ) {
-				$filters['recipient_email'] = sanitize_email( wp_unslash( $_GET['recipient_email'] ) );
-			}
-			if ( ! empty( $_GET['redemption_from'] ) ) {
-				$filters['redemption_from'] = sanitize_text_field( wp_unslash( $_GET['redemption_from'] ) );
-			}
-			if ( ! empty( $_GET['redemption_to'] ) ) {
-				$filters['redemption_to'] = sanitize_text_field( wp_unslash( $_GET['redemption_to'] ) );
-			}
-			if ( ! empty( $_GET['transaction_id'] ) ) {
-				$filters['transaction_id'] = sanitize_text_field( wp_unslash( $_GET['transaction_id'] ) );
-			}
-			if ( ! empty( $_GET['claim_transaction_id'] ) ) {
-				$filters['claim_transaction_id'] = sanitize_text_field( wp_unslash( $_GET['claim_transaction_id'] ) );
-			}
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Nonce verified above when filter params are present.
+			$filters = MPGR_Gift_Report::sanitize_filters( $_GET );
 
 			// Display report.
 			$gift_report = new MPGR_Gift_Report();

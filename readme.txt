@@ -2,6 +2,7 @@
 Contributors: omarelhawary
 Tags: memberpress, gifting, reports, csv export, reminders
 Requires at least: 5.0
+Requires PHP: 7.4
 Tested up to: 6.9
 Stable tag: 1.6.3
 License: GPLv2 or later

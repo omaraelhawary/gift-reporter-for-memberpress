@@ -19,6 +19,13 @@ class MPGR_Gift_Report {
      * Report data property
      */
     private $report_data = array();
+
+    /**
+     * Per-request cache for product dropdown query.
+     *
+     * @var array|null
+     */
+    private $products_cache = null;
     
     /**
      * Constructor
@@ -189,8 +196,7 @@ class MPGR_Gift_Report {
 		$filters = $this->sanitize_ajax_filters();
 
 		try {
-			$this->generate_report(0, 0, $filters);
-			$this->export_csv('memberpress_gift_report.csv', $filters);
+			$this->export_csv( 'memberpress_gift_report.csv', $filters );
 		} catch (Exception $e) {
 			wp_die( esc_html__( 'Error generating export. Please try again.', 'memberpress-gift-reporter' ) );
 		}
@@ -398,13 +404,13 @@ class MPGR_Gift_Report {
 			wp_send_json_error('Coupon code not found');
 		}
 
-		// Get product ID from transaction
-		global $wpdb;
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for product lookup
-		$product_id = $wpdb->get_var($wpdb->prepare(
-			"SELECT product_id FROM {$wpdb->prefix}mepr_transactions WHERE id = %d",
-			$gift_transaction_id
-		));
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$product_id = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT product_id FROM {$wpdb->prefix}mepr_transactions WHERE id = %d",
+				$gift_transaction_id
+			)
+		);
 
 		if (!$product_id) {
 			wp_send_json_error('Product not found');
@@ -626,97 +632,88 @@ class MPGR_Gift_Report {
     /**
      * REST API get report
      */
-    public function rest_get_report($request) {
+    public function rest_get_report( $request ) {
         try {
-            $data = $this->generate_report();
-            $summary = $this->get_summary();
-            
+            $filters = self::sanitize_filters( $request );
+            $data    = $this->generate_report( 1000, 0, $filters );
+            $summary = $this->get_summary( $filters );
+
             return array(
                 'success' => true,
-                'data' => $data,
-                'summary' => $summary
+                'data'    => $data,
+                'summary' => $summary,
             );
-        } catch (Exception $e) {
-            return new WP_Error('report_error', 'Unable to generate report', array('status' => 500));
+        } catch ( Exception $e ) {
+            return new WP_Error( 'report_error', 'Unable to generate report', array( 'status' => 500 ) );
         }
     }
-    
+
     /**
      * REST API export CSV
      */
-    public function rest_export_csv($request) {
+    public function rest_export_csv( $request ) {
         try {
-            $filters = $this->sanitize_export_filters($request);
-            $this->generate_report(0, 0, $filters);
-            $this->export_csv('memberpress_gift_report.csv', $filters);
-        } catch (Exception $e) {
-            return new WP_Error('export_error', 'Unable to export report', array('status' => 500));
+            $filters = self::sanitize_filters( $request );
+            $this->export_csv( 'memberpress_gift_report.csv', $filters );
+        } catch ( Exception $e ) {
+            return new WP_Error( 'export_error', 'Unable to export report', array( 'status' => 500 ) );
         }
     }
-    
+
     /**
-     * Sanitize export filters from REST API request
+     * Filter field schema (single source of truth for admin, AJAX, and REST).
+     *
+     * @return array<string, callable>
      */
-    private function sanitize_export_filters($request) {
-        $filters = array();
-        
-        $filter_fields = array(
-            'date_from' => 'sanitize_text_field',
-            'date_to' => 'sanitize_text_field',
-            'gift_status' => 'sanitize_text_field',
-            'product' => 'intval',
-            'gifter_email' => 'sanitize_email',
-            'recipient_email' => 'sanitize_email',
-            'transaction_id' => 'sanitize_text_field',
+    public static function get_filter_schema() {
+        return array(
+            'date_from'            => 'sanitize_text_field',
+            'date_to'              => 'sanitize_text_field',
+            'gift_status'          => 'sanitize_text_field',
+            'product'              => 'intval',
+            'gifter_email'         => 'sanitize_email',
+            'recipient_email'      => 'sanitize_email',
+            'transaction_id'       => 'sanitize_text_field',
             'claim_transaction_id' => 'sanitize_text_field',
-            'redemption_from' => 'sanitize_text_field',
-            'redemption_to' => 'sanitize_text_field',
+            'redemption_from'      => 'sanitize_text_field',
+            'redemption_to'        => 'sanitize_text_field',
         );
-        
-        foreach ($filter_fields as $field => $sanitize_function) {
-            $value = $request->get_param($field);
-            if (!empty($value)) {
-                $filters[$field] = $sanitize_function($value);
+    }
+
+    /**
+     * Sanitize report filters from GET/POST array or REST request.
+     *
+     * @param array|WP_REST_Request $source Raw input source.
+     * @return array Sanitized filters.
+     */
+    public static function sanitize_filters( $source ) {
+        $filters = array();
+
+        foreach ( self::get_filter_schema() as $field => $sanitize_function ) {
+            $value = null;
+
+            if ( $source instanceof WP_REST_Request ) {
+                $value = $source->get_param( $field );
+            } elseif ( is_array( $source ) && isset( $source[ $field ] ) ) {
+                $value = wp_unslash( $source[ $field ] );
+            }
+
+            if ( $value !== null && $value !== '' ) {
+                $filters[ $field ] = call_user_func( $sanitize_function, $value );
             }
         }
-        
+
         return $filters;
     }
-    
+
     /**
-     * Sanitize AJAX filter parameters
-     * Only processes specific expected fields from $_POST, not the entire array
-     * 
-     * Note: Nonce verification is performed in the calling method (ajax_export_csv)
-     * before this method is called. All inputs are sanitized via the sanitize_function.
+     * Sanitize AJAX filter parameters from $_POST.
+     *
+     * @return array Sanitized filters.
      */
     private function sanitize_ajax_filters() {
-        $filters = array();
-        
-        // Define only the specific fields we expect and their sanitization functions
-        $filter_fields = array(
-            'date_from' => 'sanitize_text_field',
-            'date_to' => 'sanitize_text_field',
-            'gift_status' => 'sanitize_text_field',
-            'product' => 'intval',
-            'gifter_email' => 'sanitize_email',
-            'recipient_email' => 'sanitize_email',
-            'transaction_id' => 'sanitize_text_field',
-            'claim_transaction_id' => 'sanitize_text_field',
-            'redemption_from' => 'sanitize_text_field',
-            'redemption_to' => 'sanitize_text_field',
-        );
-        
-        // Only extract and process the specific expected fields from $_POST
-        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in calling method (ajax_export_csv)
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- All inputs are sanitized via sanitize_function in the loop
-        foreach ( $filter_fields as $field => $sanitize_function ) {
-            if ( isset( $_POST[ $field ] ) && $_POST[ $field ] !== '' ) {
-                $filters[ $field ] = $sanitize_function( wp_unslash( $_POST[ $field ] ) );
-            }
-        }
-        
-        return $filters;
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in ajax_export_csv()
+        return self::sanitize_filters( $_POST );
     }
     
     /**
@@ -1203,8 +1200,12 @@ class MPGR_Gift_Report {
      * Get all available products for filtering
      */
     private function get_available_products() {
+        if ( null !== $this->products_cache ) {
+            return $this->products_cache;
+        }
+
         global $wpdb;
-        
+
         $query = "
         SELECT DISTINCT 
             p.ID,
@@ -1222,8 +1223,10 @@ class MPGR_Gift_Report {
             p.post_title ASC
         ";
         
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Static query with no user input
-        return $wpdb->get_results($query, ARRAY_A);
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $this->products_cache = $wpdb->get_results( $query, ARRAY_A );
+
+        return $this->products_cache;
     }
     
     /**
@@ -1291,7 +1294,9 @@ class MPGR_Gift_Report {
         
         		if (!empty($active_filters)) {
 			echo '<div class="mpgr-active-filters">';
-			echo '<strong>' . esc_html__( 'Active Filters:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html(implode(', ', $active_filters));
+			echo '<strong>' . esc_html__( 'Active Filters:', 'memberpress-gift-reporter' ) . '</strong> ';
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Each filter fragment is escaped when built.
+			echo implode( ', ', $active_filters );
 			echo '</div>';
 		}
         
@@ -1413,7 +1418,7 @@ class MPGR_Gift_Report {
         echo '</div>';
         
         		// Export button
-		echo '<a href="#" class="mpgr-export-btn" onclick="mpgrExportCSV()">&#128229; ' . esc_html__( 'Download CSV Report', 'memberpress-gift-reporter' ) . '</a>';
+		echo '<a href="#" class="mpgr-export-btn">&#128229; ' . esc_html__( 'Download CSV Report', 'memberpress-gift-reporter' ) . '</a>';
         
         if (!empty($this->report_data)) {
             // Count unclaimed gifts for bulk action
@@ -1565,7 +1570,7 @@ class MPGR_Gift_Report {
                 echo '<li>' . esc_html__( 'Adjusting redemption date filters', 'memberpress-gift-reporter' ) . '</li>';
                 echo '</ul>';
                 echo '<div class="mpgr-help-links">';
-                echo '<a href="#" onclick="clearAllFilters()" class="mpgr-clear-filters-btn">' . esc_html__( 'Clear All Filters', 'memberpress-gift-reporter' ) . '</a>';
+                echo '<a href="' . esc_url( admin_url( 'admin.php?page=memberpress-gift-report' ) ) . '" class="mpgr-clear-filters-btn">' . esc_html__( 'Clear All Filters', 'memberpress-gift-reporter' ) . '</a>';
                 echo '<a href="' . esc_url(admin_url('admin.php?page=memberpress-trans')) . '">' . esc_html__( 'View All Transactions', 'memberpress-gift-reporter' ) . '</a>';
                 echo '</div>';
                 echo '</div>';

@@ -110,7 +110,9 @@
 			var errorText = typeof mpgrReminderSettings !== 'undefined' ? mpgrReminderSettings.errorText : 'Failed to send test email.';
 			var errorSendingText = typeof mpgrReminderSettings !== 'undefined' ? mpgrReminderSettings.errorSendingText : 'Error sending test email.';
 			
-			$('#mpgr-test-email-status').html('<span style="color: #666;">' + sendingText + '</span>');
+			$('#mpgr-test-email-status').empty().append(
+				$('<span>').css('color', '#666').text(sendingText)
+			);
 			
 			$.ajax({
 				url: mpgr_reminder_ajax.ajax_url,
@@ -124,18 +126,24 @@
 				},
 				success: function(response) {
 					if (response.success) {
-						$('#mpgr-test-email-status').html('<span style="color: #46b450;">' + successText + '</span>');
+						$('#mpgr-test-email-status').empty().append(
+							$('<span>').css('color', '#46b450').text(successText)
+						);
 						$('#mpgr-test-email-input').slideUp();
 						setTimeout(function() {
 							$('#mpgr-test-email-status').text('');
 						}, 5000);
 					} else {
 						var errorMessage = response.data && response.data.message ? response.data.message : errorText;
-						$('#mpgr-test-email-status').html('<span style="color: #dc3232;">' + errorMessage + '</span>');
+						$('#mpgr-test-email-status').empty().append(
+							$('<span>').css('color', '#dc3232').text(errorMessage)
+						);
 					}
 				},
 				error: function() {
-					$('#mpgr-test-email-status').html('<span style="color: #dc3232;">' + errorSendingText + '</span>');
+					$('#mpgr-test-email-status').empty().append(
+						$('<span>').css('color', '#dc3232').text(errorSendingText)
+					);
 				}
 			});
 		});

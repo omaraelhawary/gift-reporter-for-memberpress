@@ -40,13 +40,17 @@ $user_first_name = isset( $user_first_name ) ? $user_first_name : '';
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- Template variables extracted from array, following WordPress template standards
 $user_last_name  = isset( $user_last_name ) ? $user_last_name : '';
 ?>
-<div style="font-size: 18px; font-weight: bold; margin-bottom: 20px;">Hello!</div>
+<div style="font-size: 18px; font-weight: bold; margin-bottom: 20px;"><?php echo esc_html__( 'Hello!', 'memberpress-gift-reporter' ); ?></div>
 
-<p>You have purchased a gift membership for <strong><?php echo esc_html( $product_name ); ?></strong>.</p>
+<p>
+	<?php echo esc_html__( 'Just a friendly reminder — the recipient of your gift for', 'memberpress-gift-reporter' ); ?>
+	<strong><?php echo esc_html( $product_name ); ?></strong>
+	<?php echo esc_html__( 'hasn\'t redeemed it yet.', 'memberpress-gift-reporter' ); ?>
+</p>
 
 <div style="background-color: #f3e5f5; padding: 15px; border-radius: 6px; border-left: 4px solid #9c27b0; margin: 20px 0;">
-    <strong>The recipient can redeem this gift by visiting:</strong><br>
-    <a href="<?php echo esc_url( $redemption_link ); ?>" style="color: #9c27b0; text-decoration: none; font-weight: bold;"><?php echo esc_html( $redemption_link ); ?></a>
+	<strong><?php esc_html_e( 'They can redeem it by visiting:', 'memberpress-gift-reporter' ); ?></strong><br>
+	<a href="<?php echo esc_url( $redemption_link ); ?>" style="color: #9c27b0; text-decoration: none; font-weight: bold;"><?php echo esc_html( $redemption_link ); ?></a>
 </div>
 
-<p style="font-style: italic; color: #27ae60;">Thank you for your purchase!</p>
+<p style="font-style: italic; color: #27ae60;"><?php esc_html_e( 'Feel free to share this link with them so they don\'t miss out.', 'memberpress-gift-reporter' ); ?></p>

@@ -573,6 +573,14 @@
             mpgrExportCSV();
         });
 
+        $(document).on('click', '.mpgr-clear-filters-btn', function(e) {
+            e.preventDefault();
+            var href = $(this).attr('href');
+            if (href) {
+                window.location.href = href;
+            }
+        });
+
         // Handle action button clicks
         $(document).on('click', '.mpgr-resend-email', function(e) {
             e.preventDefault();

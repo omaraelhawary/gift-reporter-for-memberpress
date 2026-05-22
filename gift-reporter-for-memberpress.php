@@ -238,9 +238,6 @@ class MPGR_MemberPressGiftReporter {
 		// Schedule weekly summary cron event only if enabled (runs every Monday at 9 AM)
 		// By default, weekly summary is disabled, so we don't schedule it on activation
 		// It will be scheduled when the user enables it in the settings
-
-		// Flush rewrite rules.
-		flush_rewrite_rules();
 	}
     
     /**
@@ -260,9 +257,6 @@ class MPGR_MemberPressGiftReporter {
 		}
 		wp_clear_scheduled_hook( 'mpgr_run_weekly_summary' );
 		wp_clear_scheduled_hook( 'mpgr_send_queued_gift_email' );
-
-		// Clean up if necessary.
-		flush_rewrite_rules();
 	}
 
 	/**
