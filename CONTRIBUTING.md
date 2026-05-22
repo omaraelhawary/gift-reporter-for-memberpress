@@ -96,6 +96,18 @@ This plugin follows WordPress Coding Standards:
    composer run-script phpcs
    ```
 
+5. **Set up and run PHPUnit (first time only):**
+   ```bash
+   # Requires local MySQL. Adjust user/password/host if needed.
+   bash bin/install-wp-tests.sh wordpress_test root root localhost latest
+   composer test
+   ```
+
+   Subsequent runs only need:
+   ```bash
+   composer test
+   ```
+
 ## Testing
 
 Before submitting a pull request, please ensure:

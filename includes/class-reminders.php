@@ -39,6 +39,10 @@ class MPGR_Reminders {
 	 * Reminder cron worker (called under lock from run_scheduled_reminders).
 	 */
 	private static function run_scheduled_reminders_work() {
+		if ( ! class_exists( 'MeprTransaction' ) ) {
+			return;
+		}
+
 		$settings = self::get_settings();
 		
 		if ( empty( $settings['enabled'] ) ) {
@@ -100,7 +104,7 @@ class MPGR_Reminders {
 		} else {
 			$cutoff_ts = time() - $min_delay_seconds;
 		}
-		$gifts = self::get_unclaimed_gifts( $cutoff_ts, 100, count( $reminder_schedules ) );
+		$gifts = self::get_unclaimed_gifts( $cutoff_ts, 500, count( $reminder_schedules ) );
 
 		foreach ( $gifts as $gift ) {
 			$sent_count = (int) self::get_reminder_meta( $gift->gift_transaction_id, '_mpgr_reminder_sent_count', 0 );
@@ -180,78 +184,7 @@ class MPGR_Reminders {
 				}
 
 				// Update tracking meta
-				global $wpdb;
-				$table = $wpdb->prefix . 'mepr_transaction_meta';
-				
-				// Update sent count
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for reminder meta update, caching not applicable for transaction meta
-				$exists = $wpdb->get_var(
-					$wpdb->prepare(
-						'SELECT COUNT(*) FROM ' . esc_sql( $table ) . ' WHERE transaction_id = %d AND meta_key = %s',
-						$gift->gift_transaction_id,
-						'_mpgr_reminder_sent_count'
-					)
-				);
-				
-				if ( $exists ) {
-					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- Necessary for reminder meta update, caching not applicable and meta queries required for transaction meta
-					$wpdb->update(
-						$table,
-						array( 'meta_value' => $schedule_index + 1 ),
-						array(
-							'transaction_id' => $gift->gift_transaction_id,
-							'meta_key'       => '_mpgr_reminder_sent_count',
-						),
-						array( '%s' ),
-						array( '%d', '%s' )
-					);
-				} else {
-					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- Necessary for reminder meta update, caching not applicable and meta queries required for transaction meta
-					$wpdb->insert(
-						$table,
-						array(
-							'transaction_id' => $gift->gift_transaction_id,
-							'meta_key'       => '_mpgr_reminder_sent_count',
-							'meta_value'     => $schedule_index + 1,
-						),
-						array( '%d', '%s', '%s' )
-					);
-				}
-				
-				// Update last reminder timestamp
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Necessary for reminder meta update, caching not applicable for transaction meta
-				$exists = $wpdb->get_var(
-					$wpdb->prepare(
-						'SELECT COUNT(*) FROM ' . esc_sql( $table ) . ' WHERE transaction_id = %d AND meta_key = %s',
-						$gift->gift_transaction_id,
-						'_mpgr_last_reminder_ts'
-					)
-				);
-				
-				if ( $exists ) {
-					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- Necessary for reminder meta update, caching not applicable and meta queries required for transaction meta
-					$wpdb->update(
-						$table,
-						array( 'meta_value' => time() ),
-						array(
-							'transaction_id' => $gift->gift_transaction_id,
-							'meta_key'       => '_mpgr_last_reminder_ts',
-						),
-						array( '%s' ),
-						array( '%d', '%s' )
-					);
-				} else {
-					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- Necessary for reminder meta update, caching not applicable and meta queries required for transaction meta
-					$wpdb->insert(
-						$table,
-						array(
-							'transaction_id' => $gift->gift_transaction_id,
-							'meta_key'       => '_mpgr_last_reminder_ts',
-							'meta_value'     => time(),
-						),
-						array( '%d', '%s', '%s' )
-					);
-				}
+				self::update_reminder_tracking( $gift->gift_transaction_id, $schedule_index + 1 );
 				
 				// Only send one reminder per run per gift
 				break;
@@ -300,13 +233,87 @@ class MPGR_Reminders {
 	public static function get_email_headers() {
 		$settings   = self::get_settings();
 		$from_name  = ! empty( $settings['from_name'] ) ? $settings['from_name'] : get_bloginfo( 'name' );
+		$from_name  = sanitize_text_field( preg_replace( '/[\r\n]+/', '', $from_name ) );
 		$from_email = ( ! empty( $settings['from_email'] ) && is_email( $settings['from_email'] ) )
-			? $settings['from_email']
+			? sanitize_email( $settings['from_email'] )
 			: get_option( 'admin_email' );
 
 		return array(
 			'Content-Type: text/html; charset=UTF-8',
 			'From: ' . $from_name . ' <' . $from_email . '>',
+		);
+	}
+
+	/**
+	 * Record a manual or queued resend in reminder tracking meta.
+	 *
+	 * @param int $transaction_id Gift transaction ID.
+	 */
+	public static function record_manual_reminder_sent( $transaction_id ) {
+		$transaction_id = (int) $transaction_id;
+		if ( $transaction_id <= 0 ) {
+			return;
+		}
+
+		$current_count = (int) self::get_reminder_meta( $transaction_id, '_mpgr_reminder_sent_count', 0 );
+		self::update_reminder_tracking( $transaction_id, $current_count + 1 );
+	}
+
+	/**
+	 * Persist reminder sent count and last-sent timestamp for a gift transaction.
+	 *
+	 * @param int $transaction_id Gift transaction ID.
+	 * @param int $sent_count     Reminder count to store.
+	 */
+	private static function update_reminder_tracking( $transaction_id, $sent_count ) {
+		self::upsert_transaction_meta( $transaction_id, '_mpgr_reminder_sent_count', (string) (int) $sent_count );
+		self::upsert_transaction_meta( $transaction_id, '_mpgr_last_reminder_ts', (string) time() );
+	}
+
+	/**
+	 * Insert or update a mepr_transaction_meta row.
+	 *
+	 * @param int    $transaction_id Transaction ID.
+	 * @param string $meta_key       Meta key.
+	 * @param string $meta_value     Meta value.
+	 */
+	private static function upsert_transaction_meta( $transaction_id, $meta_key, $meta_value ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'mepr_transaction_meta';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$exists = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM ' . esc_sql( $table ) . ' WHERE transaction_id = %d AND meta_key = %s',
+				$transaction_id,
+				$meta_key
+			)
+		);
+
+		if ( $exists ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+			$wpdb->update(
+				$table,
+				array( 'meta_value' => $meta_value ),
+				array(
+					'transaction_id' => $transaction_id,
+					'meta_key'       => $meta_key,
+				),
+				array( '%s' ),
+				array( '%d', '%s' )
+			);
+			return;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+		$wpdb->insert(
+			$table,
+			array(
+				'transaction_id' => $transaction_id,
+				'meta_key'       => $meta_key,
+				'meta_value'     => $meta_value,
+			),
+			array( '%d', '%s', '%s' )
 		);
 	}
 

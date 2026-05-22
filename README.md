@@ -116,15 +116,34 @@ The plugin has two main tabs: **Gift Report** and **Reminders**.
 
 ### REST API
 
-Get report data programmatically:
+Endpoints require a logged-in administrator (`manage_options`) and a valid WordPress REST nonce (`wp_rest`).
 
 ```php
-// Get report data
-$response = wp_remote_get(home_url('/wp-json/mpgr/v1/report'));
+$response = wp_remote_get(
+    rest_url( 'mpgr/v1/report' ),
+    array(
+        'headers' => array(
+            'X-WP-Nonce' => wp_create_nonce( 'wp_rest' ),
+        ),
+        'cookies'  => wp_unslash( $_COOKIE ),
+    )
+);
 
-// Export CSV
-$response = wp_remote_post(home_url('/wp-json/mpgr/v1/export'));
+// Export CSV (streams a file download; same auth requirements)
+$response = wp_remote_post(
+    rest_url( 'mpgr/v1/export' ),
+    array(
+        'headers' => array(
+            'X-WP-Nonce' => wp_create_nonce( 'wp_rest' ),
+        ),
+        'cookies'  => wp_unslash( $_COOKIE ),
+    )
+);
 ```
+
+Optional filter query args on `/report` match the admin report filters (`date_from`, `date_to`, `gift_status`, `product`, etc.).
+
+When calling from browser JavaScript on an admin screen, use the localized `mpgr_ajax.rest_nonce` value as `X-WP-Nonce`.
 
 ## 📈 Report Data
 

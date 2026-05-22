@@ -141,6 +141,10 @@ class MPGR_Weekly_Summary {
 	 * Weekly summary cron worker (called under lock from run_weekly_summary).
 	 */
 	private static function run_weekly_summary_work() {
+		if ( ! class_exists( 'MeprTransaction' ) ) {
+			return;
+		}
+
 		$settings = self::get_settings();
 		if ( empty( $settings['enabled'] ) ) {
 			return;
@@ -211,12 +215,20 @@ class MPGR_Weekly_Summary {
 				ON gifter_txn.id = gift_status.transaction_id 
 				AND gift_status.meta_key = '_gift_status'
 			
+			LEFT JOIN (
+				SELECT coupon_id, MIN(id) AS id
+				FROM {$wpdb->prefix}mepr_transactions
+				WHERE status = 'complete'
+				AND coupon_id IS NOT NULL
+				AND coupon_id > 0
+				GROUP BY coupon_id
+			) AS redemption_pick
+				ON coupon_meta.meta_value = redemption_pick.coupon_id
 			LEFT JOIN {$wpdb->prefix}mepr_transactions AS redemption_txn 
-				ON coupon_meta.meta_value = redemption_txn.coupon_id 
-				AND redemption_txn.status = 'complete'
+				ON redemption_txn.id = redemption_pick.id
 				AND redemption_txn.id != gifter_txn.id
 			
-		WHERE 
+		WHERE
 			gifter_txn.status IN ('complete', 'confirmed')
 			AND gifter_txn.amount > 0
 			AND gifter_txn.created_at >= %s

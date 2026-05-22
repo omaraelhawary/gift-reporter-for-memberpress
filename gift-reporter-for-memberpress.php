@@ -142,17 +142,7 @@ class MPGR_MemberPressGiftReporter {
      * Check if MemberPress is active
      */
 	private function is_memberpress_active() {
-		// Check multiple ways to detect MemberPress.
-		$checks = array(
-			'MeprTransaction class' => class_exists( 'MeprTransaction' ),
-			'MeprProduct class' => class_exists( 'MeprProduct' ),
-			'mepr_get_plugin_name function' => function_exists( 'mepr_get_plugin_name' ),
-			'MEPR_VERSION constant' => defined( 'MEPR_VERSION' ),
-			'MeprOptions class' => class_exists( 'MeprOptions' ),
-			'MeprUser class' => class_exists( 'MeprUser' ),
-		);
-
-		return in_array( true, $checks, true );
+		return class_exists( 'MeprTransaction' );
 	}
     
     /**
@@ -181,7 +171,7 @@ class MPGR_MemberPressGiftReporter {
 		require_once MPGR_PLUGIN_PATH . 'includes/class-gift-report.php';
 
 		// Initialize the report functionality.
-		new MPGR_Gift_Report();
+		MPGR_Gift_Report::get_instance();
 
 		// Load admin functionality.
 		if ( is_admin() ) {
@@ -196,6 +186,10 @@ class MPGR_MemberPressGiftReporter {
 	public function activate() {
 		// Create any necessary database tables or options.
 		add_option( 'mpgr_version', MPGR_VERSION );
+
+		if ( ! class_exists( 'MeprTransaction' ) ) {
+			return;
+		}
 
 		// Load reminders class to ensure class exists
 		require_once MPGR_PLUGIN_PATH . 'includes/class-reminders.php';
@@ -292,7 +286,7 @@ class MPGR_MemberPressGiftReporter {
 			$timestamp       = wp_next_scheduled( 'mpgr_run_weekly_summary' );
 
 			if ( ! empty( $weekly_settings['enabled'] ) && ! $timestamp ) {
-				$next_monday = strtotime( 'next Monday 9:00 AM' );
+				$next_monday = ( new DateTimeImmutable( 'next monday 9:00', wp_timezone() ) )->getTimestamp();
 				wp_schedule_event( $next_monday, 'weekly', 'mpgr_run_weekly_summary' );
 			} elseif ( empty( $weekly_settings['enabled'] ) && $timestamp ) {
 				wp_unschedule_event( $timestamp, 'mpgr_run_weekly_summary' );

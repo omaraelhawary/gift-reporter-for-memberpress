@@ -15,11 +15,15 @@
     "require-dev": {
         "squizlabs/php_codesniffer": "^3.7",
         "wp-coding-standards/wpcs": "^2.3",
-        "dealerdirect/phpcodesniffer-composer-installer": "^0.7"
+        "dealerdirect/phpcodesniffer-composer-installer": "^0.7",
+        "phpunit/phpunit": "^9.6",
+        "yoast/phpunit-polyfills": "^1.1"
     },
     "scripts": {
         "phpcs": "phpcs --standard=phpcs.xml --extensions=php --ignore=node_modules,vendor --report=checkstyle --report-file=phpcs-report.xml .",
-        "phpcbf": "phpcbf --standard=phpcs.xml --extensions=php --ignore=node_modules,vendor ."
+        "phpcbf": "phpcbf --standard=phpcs.xml --extensions=php --ignore=node_modules,vendor .",
+        "test": "phpunit",
+        "test:setup": "bash bin/install-wp-tests.sh wordpress_test root root 127.0.0.1 latest true"
     },
     "config": {
         "allow-plugins": {

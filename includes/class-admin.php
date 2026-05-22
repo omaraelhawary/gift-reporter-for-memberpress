@@ -143,8 +143,7 @@ class MPGR_Admin {
 			$filters = MPGR_Gift_Report::sanitize_filters( $_GET );
 
 			// Display report.
-			$gift_report = new MPGR_Gift_Report();
-			$gift_report->display_report($filters);
+			MPGR_Gift_Report::get_instance()->display_report( $filters );
 		}
 
 		echo '</div>';
@@ -212,7 +211,7 @@ class MPGR_Admin {
 				// If weekly summary is enabled, schedule the cron if not already scheduled
 				if ( ! $timestamp ) {
 					// Schedule weekly summary (runs every Monday at 9 AM)
-					$next_monday = strtotime( 'next Monday 9:00 AM' );
+					$next_monday = ( new DateTimeImmutable( 'next monday 9:00', wp_timezone() ) )->getTimestamp();
 					wp_schedule_event( $next_monday, 'weekly', 'mpgr_run_weekly_summary' );
 				}
 			} else {
@@ -403,6 +402,8 @@ class MPGR_Admin {
 			array(
 				'ajax_url' => admin_url( 'admin-ajax.php' ),
 				'nonce' => wp_create_nonce( 'mpgr_export_csv' ),
+				'rest_nonce' => wp_create_nonce( 'wp_rest' ),
+				'rest_url' => rest_url( 'mpgr/v1/' ),
 				'resend_email_nonce' => wp_create_nonce( 'mpgr_resend_gift_email' ),
 				'copy_link_nonce' => wp_create_nonce( 'mpgr_copy_redemption_link' ),
 				'bulk_resend_nonce' => wp_create_nonce( 'mpgr_bulk_resend_gift_emails' ),

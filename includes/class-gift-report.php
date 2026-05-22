@@ -14,7 +14,14 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Main gift report functionality
  */
 class MPGR_Gift_Report {
-    
+
+    /**
+     * Plugin instance.
+     *
+     * @var self|null
+     */
+    private static $instance = null;
+
     /**
      * Report data property
      */
@@ -26,11 +33,23 @@ class MPGR_Gift_Report {
      * @var array|null
      */
     private $products_cache = null;
-    
+
+    /**
+     * Get plugin instance.
+     *
+     * @return self
+     */
+    public static function get_instance() {
+        if ( null === self::$instance ) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
     /**
      * Constructor
      */
-	public function __construct() {
+	private function __construct() {
 		// Handle AJAX requests.
 		add_action( 'wp_ajax_mpgr_export_csv', array( $this, 'ajax_export_csv' ) );
 		add_action( 'wp_ajax_mpgr_resend_gift_email', array( $this, 'ajax_resend_gift_email' ) );
@@ -327,7 +346,10 @@ class MPGR_Gift_Report {
      * @param int $gift_transaction_id Gift transaction ID.
      */
     public function process_queued_gift_email( $gift_transaction_id ) {
-        $this->send_gift_email_for_transaction( (int) $gift_transaction_id, true );
+        $result = $this->send_gift_email_for_transaction( (int) $gift_transaction_id, true );
+        if ( ! empty( $result['success'] ) ) {
+            MPGR_Reminders::record_manual_reminder_sent( (int) $gift_transaction_id );
+        }
     }
 
     /**
@@ -349,6 +371,7 @@ class MPGR_Gift_Report {
 		$result = $this->send_gift_email_for_transaction( $gift_transaction_id, false );
 
 		if ( ! empty( $result['success'] ) ) {
+			MPGR_Reminders::record_manual_reminder_sent( $gift_transaction_id );
 			wp_send_json_success(
 				array(
 					'message' => sprintf(
@@ -475,6 +498,11 @@ class MPGR_Gift_Report {
 				continue;
 			}
 
+			if ( wp_next_scheduled( 'mpgr_send_queued_gift_email', array( $gift_transaction_id ) ) ) {
+				++$skipped_count;
+				continue;
+			}
+
 			wp_schedule_single_event(
 				time() + $delay_index,
 				'mpgr_send_queued_gift_email',
@@ -492,7 +520,7 @@ class MPGR_Gift_Report {
 			);
 		}
 
-		if ( ! wp_next_scheduled( 'mpgr_send_queued_gift_email' ) && function_exists( 'spawn_cron' ) ) {
+		if ( $queued_count > 0 && function_exists( 'spawn_cron' ) ) {
 			spawn_cron();
 		}
 
@@ -547,25 +575,38 @@ class MPGR_Gift_Report {
             'methods' => 'GET',
             'callback' => array($this, 'rest_get_report'),
             'permission_callback' => array($this, 'rest_permission_check'),
-            'args' => array(
-                'nonce' => array(
-                    'required' => true,
-                    'sanitize_callback' => 'sanitize_text_field',
-                ),
-            ),
+            'args' => self::get_rest_filter_args(),
         ));
         
         register_rest_route('mpgr/v1', '/export', array(
             'methods' => 'POST',
             'callback' => array($this, 'rest_export_csv'),
             'permission_callback' => array($this, 'rest_permission_check'),
-            'args' => array(
-                'nonce' => array(
-                    'required' => true,
-                    'sanitize_callback' => 'sanitize_text_field',
-                ),
-            ),
+            'args' => self::get_rest_filter_args(),
         ));
+    }
+
+    /**
+     * REST argument definitions for report filter params.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public static function get_rest_filter_args() {
+        $args = array(
+            'nonce' => array(
+                'required' => false,
+                'sanitize_callback' => 'sanitize_text_field',
+            ),
+        );
+
+        foreach ( self::get_filter_schema() as $field => $sanitize_function ) {
+            $args[ $field ] = array(
+                'required'          => false,
+                'sanitize_callback' => $sanitize_function,
+            );
+        }
+
+        return $args;
     }
     
     /**
@@ -577,9 +618,9 @@ class MPGR_Gift_Report {
             return false;
         }
         
-        // Verify nonce from header or parameter
-        $nonce = $request->get_header('X-WP-Nonce') ?: $request->get_param('nonce');
-        if (!$nonce || !wp_verify_nonce($nonce, 'mpgr_rest_nonce')) {
+        // Verify WordPress REST nonce (X-WP-Nonce header or nonce query param).
+        $nonce = $request->get_header( 'X-WP-Nonce' ) ?: $request->get_param( 'nonce' );
+        if ( ! $nonce || ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
             return false;
         }
         
@@ -647,12 +688,9 @@ class MPGR_Gift_Report {
      * REST API export CSV
      */
     public function rest_export_csv( $request ) {
-        try {
-            $filters = self::sanitize_filters( $request );
-            $this->export_csv( 'memberpress_gift_report.csv', $filters );
-        } catch ( Exception $e ) {
-            return new WP_Error( 'export_error', 'Unable to export report', array( 'status' => 500 ) );
-        }
+        $filters = self::sanitize_filters( $request );
+        $this->export_csv( 'memberpress_gift_report.csv', $filters );
+        // export_csv() streams the file and exits.
     }
 
     /**
@@ -901,8 +939,9 @@ class MPGR_Gift_Report {
      */
     private function get_sort_clause() {
         $allowed = array(
-            'gift_transaction_id' => 'gifter_txn.id',
-            'gift_purchase_date'  => 'gifter_txn.created_at',
+            'gift_transaction_id'   => 'gifter_txn.id',
+            'gift_transaction_number' => 'gifter_txn.trans_num',
+            'gift_purchase_date'    => 'gifter_txn.created_at',
             'gift_total'          => 'gifter_txn.total',
             'product_name'        => 'gift_product.post_title',
             'gift_status'         => "COALESCE(gift_status.meta_value, 'unclaimed')",
@@ -1003,6 +1042,7 @@ class MPGR_Gift_Report {
     private function render_sortable_column_header( $label, $column_key, $filters, $current_orderby, $current_order ) {
         $sortable = array(
             'gift_transaction_id',
+            'gift_transaction_number',
             'gift_purchase_date',
             'gift_total',
             'product_name',
@@ -1042,8 +1082,9 @@ class MPGR_Gift_Report {
      */
     private function get_table_column_class( $column_key ) {
         $map = array(
-            'gift_transaction_id' => 'mpgr-col-id',
-            'gift_purchase_date'  => 'mpgr-col-nowrap',
+            'gift_transaction_id'     => 'mpgr-col-id',
+            'gift_transaction_number' => 'mpgr-col-id',
+            'gift_purchase_date'      => 'mpgr-col-nowrap',
             'gift_total'          => 'mpgr-col-nowrap',
             'gift_status'         => 'mpgr-col-nowrap',
             'redemption_date'     => 'mpgr-col-nowrap',
@@ -1394,14 +1435,18 @@ class MPGR_Gift_Report {
         if (class_exists('MeprAppHelper')) {
             return MeprAppHelper::format_currency($amount, $show_symbol);
         }
-        
+
         // Fallback if MemberPress helper is not available
+        if ( ! class_exists( 'MeprOptions' ) ) {
+            return '$' . number_format( (float) $amount, 2 );
+        }
+
         $mepr_options = MeprOptions::fetch();
         $symbol = $mepr_options->currency_symbol;
         $symbol_after = $mepr_options->currency_symbol_after;
-        
+
         // Format the number
-        if (MeprUtils::is_zero_decimal_currency()) {
+        if ( class_exists( 'MeprUtils' ) && MeprUtils::is_zero_decimal_currency() ) {
             $formatted_amount = number_format($amount, 0);
         } else {
             $formatted_amount = number_format($amount, 2);
@@ -1697,7 +1742,7 @@ class MPGR_Gift_Report {
 				echo '<th class="mpgr-checkbox-col"><input type="checkbox" id="mpgr-select-all-header" title="' . esc_attr__( 'Select all unclaimed gifts', 'memberpress-gift-reporter' ) . '"></th>';
 			}
 			$this->render_sortable_column_header( __( 'Gift ID', 'memberpress-gift-reporter' ), 'gift_transaction_id', $filters, $current_orderby, $current_order );
-			$this->render_sortable_column_header( __( 'Transaction ID', 'memberpress-gift-reporter' ), 'gift_transaction_id', $filters, $current_orderby, $current_order );
+			$this->render_sortable_column_header( __( 'Transaction ID', 'memberpress-gift-reporter' ), 'gift_transaction_number', $filters, $current_orderby, $current_order );
 			$this->render_sortable_column_header( __( 'Purchase Date', 'memberpress-gift-reporter' ), 'gift_purchase_date', $filters, $current_orderby, $current_order );
 			echo '<th class="mpgr-col-email">' . esc_html__( 'Gifter Email', 'memberpress-gift-reporter' ) . '</th>';
 			$this->render_sortable_column_header( __( 'Product', 'memberpress-gift-reporter' ), 'product_name', $filters, $current_orderby, $current_order );
