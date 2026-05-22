@@ -38,6 +38,11 @@ access_log
 # PHP CodeSniffer cache
 .phpcs.cache
 
+# Secrets and local env (never commit SVN_PASSWORD or similar)
+.env
+.env.*
+!.env.example
+
 # Build artifacts and distribution files
 *.zip
 build/

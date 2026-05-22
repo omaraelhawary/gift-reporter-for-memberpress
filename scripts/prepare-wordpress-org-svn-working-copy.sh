@@ -81,4 +81,4 @@ fi
 
 echo "Prepared trunk + assets under ${SVN_WC}"
 echo "Version: ${VERSION} (from ${ZIP})"
-echo "Next: export SVN_USERNAME SVN_PASSWORD, then bash scripts/deploy-wordpress-org-svn.sh"
+echo "Next: set SVN_USERNAME and SVN_PASSWORD in your environment, then bash scripts/deploy-wordpress-org-svn.sh"

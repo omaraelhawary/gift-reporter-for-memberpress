@@ -10,6 +10,7 @@
 #   export SVN_PASSWORD=your-application-password
 #   bash scripts/deploy-wordpress-org-svn.sh
 set -euo pipefail
+set +x  # Never trace; would leak SVN_PASSWORD if bash -x is enabled upstream.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -90,8 +91,8 @@ if svn_tag_exists; then
   echo "tags/${VERSION} already exists on WordPress.org SVN"
 else
   echo "Creating tags/${VERSION} from trunk (remote copy)..."
-  if ! svn_non_interactive copy "${SVN_URL}/trunk" "${SVN_URL}/tags/${VERSION}" -m "Tag ${VERSION}"; then
-    echo "::error::Failed to create SVN tag ${VERSION}. Check SVN_USERNAME/SVN_PASSWORD and commit access." >&2
+  if ! svn_non_interactive copy "${SVN_URL}/trunk" "${SVN_URL}/tags/${VERSION}" -m "Tag ${VERSION}" 2>/dev/null; then
+    echo "::error::Failed to create SVN tag ${VERSION}. Check SVN credentials and commit access." >&2
     exit 1
   fi
   echo "Created tags/${VERSION}"

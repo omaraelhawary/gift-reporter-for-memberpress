@@ -69,5 +69,16 @@ This plugin:
 
 Security updates will be released as new versions. Please update the plugin as soon as security updates are available.
 
+## WordPress.org deploy credentials
+
+`SVN_PASSWORD` must **never** be committed to this repository.
+
+- **GitHub Actions:** store only in repository secrets (`SVN_USERNAME`, `SVN_PASSWORD`). GitHub masks these in workflow logs.
+- **Local deploy:** use `export SVN_PASSWORD=...` in your shell session only; do not add to `.env` files that might be committed.
+- **Documentation:** examples use placeholders such as `your-application-password`, not real values.
+- **Release zip:** deploy scripts and workflow files are excluded from `dist/` builds.
+
+If a password is ever committed, revoke the WordPress.org application password immediately and create a new one.
+
 Thank you for helping keep Gift Reporter for MemberPress and its users safe!
 
