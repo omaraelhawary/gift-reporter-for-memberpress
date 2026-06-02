@@ -50,6 +50,10 @@ function mpgr_tests_register_memberpress_stubs() {
 			}
 		}
 	}
+
+	if ( ! class_exists( 'memberpress\gifting\models\Gift' ) ) {
+		require_once dirname( __FILE__ ) . '/stubs/class-gift-stub.php';
+	}
 }
 
 tests_add_filter(
@@ -73,6 +77,7 @@ tests_add_filter(
 		require_once MPGR_PLUGIN_PATH . 'includes/class-reminders.php';
 		require_once MPGR_PLUGIN_PATH . 'includes/class-weekly-summary.php';
 		require_once MPGR_PLUGIN_PATH . 'includes/class-gift-report.php';
+		require_once MPGR_PLUGIN_PATH . 'includes/class-onboarding.php';
 	}
 );
 

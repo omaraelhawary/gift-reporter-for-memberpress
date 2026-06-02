@@ -173,6 +173,9 @@ class MPGR_MemberPressGiftReporter {
 		// Initialize the report functionality.
 		MPGR_Gift_Report::get_instance();
 
+		require_once MPGR_PLUGIN_PATH . 'includes/class-onboarding.php';
+		MPGR_Onboarding::init();
+
 		// Load admin functionality.
 		if ( is_admin() ) {
 			require_once MPGR_PLUGIN_PATH . 'includes/class-admin.php';

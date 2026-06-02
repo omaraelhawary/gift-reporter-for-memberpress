@@ -965,6 +965,17 @@ class MPGR_Gift_Report {
      * @param array $extra_args  Additional query args.
      * @return string Admin URL.
      */
+    public function get_report_url( $filters = array(), $extra_args = array() ) {
+        return $this->get_report_page_url( $filters, $extra_args );
+    }
+
+    /**
+     * Build admin URL for report list with filters, sort, and pagination preserved.
+     *
+     * @param array $filters     Active filters.
+     * @param array $extra_args  Additional query args.
+     * @return string Admin URL.
+     */
     private function get_report_page_url( $filters = array(), $extra_args = array() ) {
         $args = array_merge(
             array(
@@ -1523,6 +1534,10 @@ class MPGR_Gift_Report {
         
         		echo '<div class="mpgr-gift-report">';
 		echo '<h2>🎁 ' . esc_html__( 'MemberPress Gift Report', 'memberpress-gift-reporter' ) . '</h2>';
+
+		if ( class_exists( 'MPGR_Onboarding' ) ) {
+			MPGR_Onboarding::render_welcome_banner();
+		}
 		
 		$this->render_filter_presets();
 

@@ -7,7 +7,7 @@
     "start": "npm run build",
     "build": "npm run build:css && npm run build:js",
     "build:css": "cleancss -o assets/css/style.min.css assets/css/style.css && cleancss -o assets/css/admin.min.css assets/css/admin.css",
-    "build:js": "uglifyjs assets/js/script.js -o assets/js/script.min.js && uglifyjs assets/js/admin.js -o assets/js/admin.min.js",
+    "build:js": "uglifyjs assets/js/script.js -o assets/js/script.min.js && uglifyjs assets/js/admin.js -o assets/js/admin.min.js && uglifyjs assets/js/onboarding.js -o assets/js/onboarding.min.js",
     "prepack": "npm run build",
     "dist": "bash scripts/build-release.sh",
     "package": "npm run build && bash scripts/build-release.sh"
