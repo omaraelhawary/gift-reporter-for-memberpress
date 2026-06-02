@@ -53,6 +53,7 @@ Apply filters on the Gift Report tab, then click **Download CSV Report**. Only f
 == Changelog ==
 
 = 1.8.0 =
+* Tested up to WordPress 7.0
 * Welcome banner, admin-bar unclaimed pulse, day-7 cliffhanger, Monday Pulse weekly summary prompt, recovery reel, and Stuck Gifts aging arcs
 * Bulk remind shortcut from Stuck Gifts (auto-select unclaimed rows on filtered report)
 * Clearer Reminders tab copy (gifter vs recipient; collapsible email variable docs)
