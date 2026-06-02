@@ -19,12 +19,18 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 		delete_option( 'mpgr_reminder_settings' );
 		delete_option( 'mpgr_weekly_summary_settings' );
 		delete_option( 'mpgr_cron_migrated_v1_6_4' );
+		delete_option( 'mpgr_last_report_snapshot' );
+		delete_option( 'mpgr_activation_ts' );
 		delete_transient( 'mpgr_pulse_stats' );
+		delete_transient( 'mpgr_aging_arcs' );
 
 		$user_id = get_current_user_id();
 		if ( $user_id ) {
 			delete_user_meta( $user_id, 'mpgr_welcome_dismissed' );
 			delete_user_meta( $user_id, 'mpgr_admin_bar_dismissed' );
+			delete_user_meta( $user_id, 'mpgr_cliffhanger_snooze' );
+			delete_user_meta( $user_id, 'mpgr_monday_pulse_dismissed' );
+			delete_user_meta( $user_id, 'mpgr_report_viewed' );
 		}
 
 		$this->ensure_memberpress_meta_table();

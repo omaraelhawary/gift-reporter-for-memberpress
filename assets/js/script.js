@@ -465,6 +465,56 @@
     }
 
     /**
+     * Strip bulk-remind query flag from the URL (avoids re-select on refresh).
+     */
+    function stripBulkRemindParam() {
+        if (!window.history.replaceState) {
+            return;
+        }
+
+        var url = new URL(window.location.href);
+        if (!url.searchParams.has('mpgr_bulk_remind')) {
+            return;
+        }
+
+        url.searchParams.delete('mpgr_bulk_remind');
+        window.history.replaceState({}, '', url.toString());
+    }
+
+    /**
+     * After Stuck Gifts "Bulk remind": select unclaimed rows and scroll to send action.
+     */
+    function maybeAutoBulkRemind() {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('mpgr_bulk_remind') !== '1') {
+            return;
+        }
+
+        stripBulkRemindParam();
+
+        if (!$('.mpgr-gift-checkbox').length) {
+            showMessage('No unclaimed gifts on this page match this bucket.', 'error');
+            return;
+        }
+
+        selectAllUnclaimed();
+
+        var selectedCount = getSelectedGiftIds().length;
+        var message = selectedCount + ' gift' + (selectedCount === 1 ? '' : 's') +
+            ' selected. Review the list, then click Send Reminder Emails to Selected.';
+        showMessage(message, 'info');
+
+        var $bulk = $('.mpgr-bulk-actions');
+        if ($bulk.length) {
+            $('html, body').animate({ scrollTop: $bulk.offset().top - 100 }, 300);
+            $bulk.addClass('mpgr-bulk-actions--highlight');
+            setTimeout(function() {
+                $bulk.removeClass('mpgr-bulk-actions--highlight');
+            }, 2500);
+        }
+    }
+
+    /**
      * Bulk resend gift emails
      */
     function bulkResendGiftEmails() {
@@ -564,6 +614,11 @@
                     color: #721c24;
                     border: 1px solid #f5c6cb;
                 }
+                .mpgr-info {
+                    background-color: #e7f3ff;
+                    color: #0a4b78;
+                    border: 1px solid #b8daff;
+                }
             `)
             .appendTo('head');
 
@@ -626,6 +681,7 @@
 
         // Initialize bulk actions on page load
         updateBulkActions();
+        maybeAutoBulkRemind();
 
         // Add loading indicator for table
         $('.mpgr-table').on('load', function() {
