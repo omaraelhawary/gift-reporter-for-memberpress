@@ -62,7 +62,7 @@ tests_add_filter(
 		mpgr_tests_register_memberpress_stubs();
 
 		if ( ! defined( 'MPGR_VERSION' ) ) {
-			define( 'MPGR_VERSION', '1.7.0' );
+			define( 'MPGR_VERSION', '1.8.0' );
 		}
 		if ( ! defined( 'MPGR_PLUGIN_URL' ) ) {
 			define( 'MPGR_PLUGIN_URL', 'http://example.org/wp-content/plugins/memberpress-gift-reporter/' );
