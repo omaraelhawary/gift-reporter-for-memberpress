@@ -70,3 +70,57 @@
 .mpgr-pagination {
 	margin-top: 16px;
 }
+
+/* Phase 0 — Welcome banner */
+.mpgr-welcome-banner {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 12px 16px;
+	margin: 16px 0;
+	border-left-color: #2271b1;
+}
+
+.mpgr-welcome-banner__content {
+	flex: 1;
+}
+
+.mpgr-welcome-banner__message {
+	margin: 0 0 12px;
+	font-size: 14px;
+}
+
+.mpgr-welcome-banner__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+/* Admin bar unclaimed pulse */
+#wpadminbar #wp-admin-bar-mpgr-gift-pulse > .ab-item {
+	background-color: #b32d2e;
+	color: #fff;
+}
+
+#wpadminbar #wp-admin-bar-mpgr-gift-pulse:hover > .ab-item,
+#wpadminbar #wp-admin-bar-mpgr-gift-pulse > .ab-item:focus {
+	background-color: #8a2424;
+	color: #fff;
+}
+
+#wpadminbar #wp-admin-bar-mpgr-gift-pulse .mpgr-dismiss-admin-bar {
+	margin-left: 8px;
+	padding: 0 6px;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+	font-size: 16px;
+	line-height: 1;
+	vertical-align: middle;
+}
+
+#wpadminbar #wp-admin-bar-mpgr-gift-pulse .mpgr-dismiss-admin-bar:hover {
+	opacity: 0.85;
+}
