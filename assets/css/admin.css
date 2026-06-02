@@ -124,3 +124,72 @@
 #wpadminbar #wp-admin-bar-mpgr-gift-pulse .mpgr-dismiss-admin-bar:hover {
 	opacity: 0.85;
 }
+
+/* Phase 0 — Cliffhanger, Monday Pulse, Stuck Gifts, Recovery reel */
+.mpgr-cliffhanger,
+.mpgr-monday-pulse,
+.mpgr-recovery-reel {
+	display: block;
+	padding: 12px 16px;
+	margin: 16px 0;
+}
+
+.mpgr-cliffhanger__message,
+.mpgr-monday-pulse__message,
+.mpgr-recovery-reel__message {
+	margin: 0 0 12px;
+	font-size: 14px;
+}
+
+.mpgr-cliffhanger__actions,
+.mpgr-monday-pulse__actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.mpgr-monday-pulse__status {
+	margin-left: 4px;
+	font-style: italic;
+}
+
+.mpgr-stuck-gifts {
+	margin: 16px 0;
+	padding: 12px 16px;
+	background: #f6f7f7;
+	border: 1px solid #c3c4c7;
+	border-radius: 4px;
+}
+
+.mpgr-stuck-gifts__title {
+	margin: 0 0 12px;
+	font-size: 14px;
+}
+
+.mpgr-stuck-gifts__arcs {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.mpgr-stuck-gifts__arc {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.mpgr-stuck-gifts__label {
+	font-weight: 600;
+	min-width: 80px;
+}
+
+.mpgr-advanced-vars summary {
+	cursor: pointer;
+	color: #2271b1;
+}
+
+.mpgr-advanced-vars summary:hover {
+	color: #135e96;
+}

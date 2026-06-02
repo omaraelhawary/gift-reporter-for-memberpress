@@ -176,6 +176,10 @@ class MPGR_MemberPressGiftReporter {
 		require_once MPGR_PLUGIN_PATH . 'includes/class-onboarding.php';
 		MPGR_Onboarding::init();
 
+		if ( class_exists( 'MPGR_Weekly_Summary' ) ) {
+			MPGR_Weekly_Summary::maybe_schedule_default();
+		}
+
 		// Load admin functionality.
 		if ( is_admin() ) {
 			require_once MPGR_PLUGIN_PATH . 'includes/class-admin.php';
@@ -189,6 +193,7 @@ class MPGR_MemberPressGiftReporter {
 	public function activate() {
 		// Create any necessary database tables or options.
 		add_option( 'mpgr_version', MPGR_VERSION );
+		add_option( 'mpgr_activation_ts', time() );
 
 		if ( ! class_exists( 'MeprTransaction' ) ) {
 			return;

@@ -1410,7 +1410,8 @@ class MPGR_Gift_Report {
             COUNT(DISTINCT gifter_txn.id) AS total_gifts,
             SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed' THEN 1 ELSE 0 END) AS claimed_gifts,
             SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') != 'claimed' THEN 1 ELSE 0 END) AS unclaimed_gifts,
-            SUM(gifter_txn.total) AS total_revenue
+            SUM(gifter_txn.total) AS total_revenue,
+            SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed' THEN gifter_txn.total ELSE 0 END) AS claimed_revenue
         FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
         " . $this->get_report_joins_sql() . "
         WHERE {$where_clause}
@@ -1422,16 +1423,80 @@ class MPGR_Gift_Report {
         $total     = isset( $row['total_gifts'] ) ? (int) $row['total_gifts'] : 0;
         $claimed   = isset( $row['claimed_gifts'] ) ? (int) $row['claimed_gifts'] : 0;
         $unclaimed = isset( $row['unclaimed_gifts'] ) ? (int) $row['unclaimed_gifts'] : 0;
-        $revenue   = isset( $row['total_revenue'] ) ? (float) $row['total_revenue'] : 0;
+        $revenue         = isset( $row['total_revenue'] ) ? (float) $row['total_revenue'] : 0;
+        $claimed_revenue = isset( $row['claimed_revenue'] ) ? (float) $row['claimed_revenue'] : 0;
 
         return array(
-            'total_gifts'             => $total,
-            'claimed_gifts'           => $claimed,
-            'unclaimed_gifts'         => $unclaimed,
-            'claim_rate'              => $total > 0 ? round( ( $claimed / $total ) * 100, 2 ) : 0,
-            'total_revenue'           => $revenue,
-            'total_revenue_formatted' => $this->format_currency( $revenue ),
+            'total_gifts'                  => $total,
+            'claimed_gifts'                => $claimed,
+            'unclaimed_gifts'              => $unclaimed,
+            'claim_rate'                   => $total > 0 ? round( ( $claimed / $total ) * 100, 2 ) : 0,
+            'total_revenue'                => $revenue,
+            'total_revenue_formatted'      => $this->format_currency( $revenue ),
+            'claimed_revenue'              => $claimed_revenue,
+            'claimed_revenue_formatted'    => $this->format_currency( $claimed_revenue ),
         );
+    }
+
+    /**
+     * Unclaimed gift aging buckets for the stuck-gifts strip.
+     *
+     * @return array<string, array{label:string,count:int,revenue:float,revenue_formatted:string,filter_url:string,bulk_remind_url:string}>
+     */
+    public function get_unclaimed_aging_arcs() {
+        $transient_key = class_exists( 'MPGR_Onboarding' ) ? MPGR_Onboarding::AGING_TRANSIENT : 'mpgr_aging_arcs';
+        $cached = get_transient( $transient_key );
+        if ( is_array( $cached ) ) {
+            $sample = reset( $cached );
+            if ( is_array( $sample ) && isset( $sample['bulk_remind_url'] ) ) {
+                return $cached;
+            }
+            delete_transient( $transient_key );
+        }
+
+        $windows = array(
+            '7-14'  => array(
+                'label'     => __( '7–14 days', 'memberpress-gift-reporter' ),
+                'date_from' => gmdate( 'Y-m-d', strtotime( '-14 days' ) ),
+                'date_to'   => gmdate( 'Y-m-d', strtotime( '-7 days' ) ),
+            ),
+            '14-30' => array(
+                'label'     => __( '14–30 days', 'memberpress-gift-reporter' ),
+                'date_from' => gmdate( 'Y-m-d', strtotime( '-30 days' ) ),
+                'date_to'   => gmdate( 'Y-m-d', strtotime( '-14 days' ) ),
+            ),
+            '30plus' => array(
+                'label'   => __( '30+ days', 'memberpress-gift-reporter' ),
+                'date_to' => gmdate( 'Y-m-d', strtotime( '-30 days' ) ),
+            ),
+        );
+
+        $arcs = array();
+
+        foreach ( $windows as $key => $window ) {
+            $filters = array( 'gift_status' => 'unclaimed' );
+            if ( ! empty( $window['date_from'] ) ) {
+                $filters['date_from'] = $window['date_from'];
+            }
+            if ( ! empty( $window['date_to'] ) ) {
+                $filters['date_to'] = $window['date_to'];
+            }
+
+            $summary = $this->get_summary( $filters );
+
+            $arcs[ $key ] = array(
+                'label'              => $window['label'],
+                'count'              => isset( $summary['total_gifts'] ) ? (int) $summary['total_gifts'] : 0,
+                'revenue'            => isset( $summary['total_revenue'] ) ? (float) $summary['total_revenue'] : 0.0,
+                'revenue_formatted'  => isset( $summary['total_revenue_formatted'] ) ? $summary['total_revenue_formatted'] : '',
+                'filter_url'         => $this->get_report_url( $filters ),
+                'bulk_remind_url'    => $this->get_report_url( $filters, array( 'mpgr_bulk_remind' => '1' ) ),
+            );
+        }
+
+        set_transient( $transient_key, $arcs, 300 );
+
+        return $arcs;
     }
     
     /**
@@ -1441,7 +1506,7 @@ class MPGR_Gift_Report {
      * @param bool $show_symbol Whether to show currency symbol
      * @return string Formatted currency string
      */
-    private function format_currency($amount, $show_symbol = true) {
+    public function format_currency($amount, $show_symbol = true) {
         // Use MemberPress's currency formatting function
         if (class_exists('MeprAppHelper')) {
             return MeprAppHelper::format_currency($amount, $show_symbol);
@@ -1527,6 +1592,10 @@ class MPGR_Gift_Report {
 
         $this->generate_report( $per_page, $offset, $filters, $sort_clause );
         $summary = $this->get_summary( $filters );
+        $all_time_summary = $this->get_summary( array() );
+        $prior_snapshot   = class_exists( 'MPGR_Onboarding' )
+            ? get_option( MPGR_Onboarding::SNAPSHOT_OPTION, array() )
+            : array();
         
         // Styles are enqueued via admin_enqueue_scripts hook in class-admin.php
         // Note: Inline styles in email templates (get_fallback_email_template, get_email_header, etc.)
@@ -1537,6 +1606,8 @@ class MPGR_Gift_Report {
 
 		if ( class_exists( 'MPGR_Onboarding' ) ) {
 			MPGR_Onboarding::render_welcome_banner();
+			MPGR_Onboarding::render_monday_pulse();
+			MPGR_Onboarding::render_stuck_gifts_arcs();
 		}
 		
 		$this->render_filter_presets();
@@ -1685,6 +1756,10 @@ class MPGR_Gift_Report {
         echo '</form>';
         echo '</div>';
         
+        if ( class_exists( 'MPGR_Onboarding' ) ) {
+            MPGR_Onboarding::render_recovery_reel( $all_time_summary, $prior_snapshot );
+        }
+
         echo '<div class="mpgr-summary">';
         
         // Determine if filters are applied
@@ -1936,6 +2011,12 @@ class MPGR_Gift_Report {
 			}
         }
         
+        if ( class_exists( 'MPGR_Onboarding' ) ) {
+            MPGR_Onboarding::render_cliffhanger();
+            MPGR_Onboarding::save_report_snapshot( $all_time_summary );
+            MPGR_Onboarding::mark_report_viewed();
+        }
+
         echo '</div>';
         
         // JavaScript is enqueued via admin_enqueue_scripts hook in class-admin.php

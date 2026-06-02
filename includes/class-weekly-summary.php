@@ -26,9 +26,56 @@ class MPGR_Weekly_Summary {
 		$defaults = array(
 			'enabled' => false,
 		);
-		$settings = get_option( 'mpgr_weekly_summary_settings', array() );
+
+		$raw = get_option( 'mpgr_weekly_summary_settings' );
+		if ( false === $raw && get_option( 'mpgr_activation_ts' ) ) {
+			$defaults['enabled'] = true;
+		}
+
+		$settings = false === $raw ? array() : $raw;
 		$settings = wp_parse_args( $settings, $defaults );
 		return $settings;
+	}
+
+	/**
+	 * Schedule weekly summary cron for next Monday 9 AM site time.
+	 */
+	public static function schedule_cron() {
+		if ( wp_next_scheduled( 'mpgr_run_weekly_summary' ) ) {
+			return;
+		}
+
+		$next_monday = ( new DateTimeImmutable( 'next monday 9:00', wp_timezone() ) )->getTimestamp();
+		wp_schedule_event( $next_monday, 'weekly', 'mpgr_run_weekly_summary' );
+	}
+
+	/**
+	 * Schedule cron when weekly summary defaults to enabled on new installs.
+	 */
+	public static function maybe_schedule_default() {
+		$settings = self::get_settings();
+		if ( ! empty( $settings['enabled'] ) ) {
+			self::schedule_cron();
+		}
+	}
+
+	/**
+	 * Send a one-off weekly summary preview email.
+	 *
+	 * @param string $to_email Recipient email; defaults to current admin user.
+	 * @return bool Whether wp_mail succeeded.
+	 */
+	public static function send_preview_email( $to_email = '' ) {
+		if ( ! class_exists( 'MeprTransaction' ) ) {
+			return false;
+		}
+
+		$to = $to_email ? $to_email : wp_get_current_user()->user_email;
+		if ( ! is_email( $to ) ) {
+			return false;
+		}
+
+		return self::send_weekly_email( $to, true );
 	}
 
 	/**
@@ -150,29 +197,37 @@ class MPGR_Weekly_Summary {
 			return;
 		}
 
-		// Get admin email
 		$admin_email = get_option( 'admin_email' );
-		
 		if ( ! $admin_email || ! is_email( $admin_email ) ) {
 			return;
 		}
 
-		// Get data for the past week
-		$week_data = self::get_week_data();
-		
-		// Generate email content
+		self::send_weekly_email( $admin_email, false );
+	}
+
+	/**
+	 * Build and send weekly summary email.
+	 *
+	 * @param string $to          Recipient email.
+	 * @param bool   $is_preview  Whether to append preview marker to subject.
+	 * @return bool
+	 */
+	private static function send_weekly_email( $to, $is_preview = false ) {
+		$week_data     = self::get_week_data();
 		$email_content = self::generate_email_content( $week_data );
-		
-		// Send email
-		$subject = sprintf(
+		$subject       = sprintf(
 			/* translators: %s is the site name */
 			__( 'Weekly Gift Summary - %s', 'memberpress-gift-reporter' ),
 			get_bloginfo( 'name' )
 		);
-		
+
+		if ( $is_preview ) {
+			$subject .= ' ' . __( '(Preview)', 'memberpress-gift-reporter' );
+		}
+
 		$headers = MPGR_Reminders::get_email_headers();
-		
-		wp_mail( $admin_email, $subject, $email_content, $headers );
+
+		return wp_mail( $to, $subject, $email_content, $headers );
 	}
 
 	/**

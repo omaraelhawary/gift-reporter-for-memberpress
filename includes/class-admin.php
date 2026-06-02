@@ -502,9 +502,10 @@ class MPGR_Admin {
 		$gifter_email_subject = ! empty( $settings['gifter_email_subject'] ) ? $settings['gifter_email_subject'] : ( ! empty( $settings['email_subject'] ) ? $settings['email_subject'] : $default_gifter_subject );
 		?>
 		<div class="mpgr-reminder-settings">
-			<p class="description" style="margin: 20px 0;">
-				<?php esc_html_e( 'Automatically send reminder emails for unclaimed gifts after a configurable delay. You can customize the email template below.', 'memberpress-gift-reporter' ); ?>
-			</p>
+			<div class="mpgr-reminders-header notice notice-info inline" style="margin: 20px 0; padding: 12px 16px;">
+				<p style="margin: 0 0 8px;"><strong><?php esc_html_e( 'Gift Reporter reminders nudge the gifter — not the recipient.', 'memberpress-gift-reporter' ); ?></strong></p>
+				<p style="margin: 0;"><?php esc_html_e( 'These emails go to the person who purchased the gift, asking them to follow up if it has not been redeemed yet. They are separate from MemberPress Gifting membership expiry reminders, which apply after a gift has been claimed.', 'memberpress-gift-reporter' ); ?></p>
+			</div>
 
 			<form method="post" action="" id="mpgr-reminder-settings-form">
 				<?php wp_nonce_field( 'mpgr_save_reminder_settings', 'mpgr_reminder_settings_nonce' ); ?>
@@ -571,7 +572,7 @@ class MPGR_Admin {
 										?>
 										<div class="mpgr-schedule-row" style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
 											<label>
-												<?php esc_html_e( 'Send reminder after', 'memberpress-gift-reporter' ); ?>
+												<?php esc_html_e( 'Send a reminder this many days/hours after purchase', 'memberpress-gift-reporter' ); ?>
 												<input type="number" name="mpgr_reminder_schedules[<?php echo esc_attr( $index ); ?>][delay_value]" value="<?php echo esc_attr( $delay_value ); ?>" min="0" max="<?php echo esc_attr( $delay_unit === 'hours' ? 8760 : 365 ); ?>" class="small-text mpgr-delay-value" style="width: 60px;" required>
 												<select name="mpgr_reminder_schedules[<?php echo esc_attr( $index ); ?>][delay_unit]" class="mpgr-delay-unit" style="margin-left: 5px;">
 													<option value="hours" <?php selected( $delay_unit, 'hours' ); ?>><?php esc_html_e( 'hours', 'memberpress-gift-reporter' ); ?></option>
@@ -625,9 +626,12 @@ class MPGR_Admin {
 							</th>
 							<td>
 								<input type="text" id="mpgr_gifter_email_subject" name="mpgr_gifter_email_subject" value="<?php echo esc_attr( $gifter_email_subject ); ?>" class="regular-text" placeholder="<?php esc_attr_e( 'Reminder: Your Gift Purchase - {$product_name}', 'memberpress-gift-reporter' ); ?>">
-								<p class="description">
-									<?php esc_html_e( 'Email subject line. Available variables: {$product_name}, {$site_name}, {$blogname}, {$user_login}, {$user_email}, {$user_first_name}, {$user_last_name}', 'memberpress-gift-reporter' ); ?>
-								</p>
+								<details class="mpgr-advanced-vars" style="margin-top: 8px;">
+									<summary><?php esc_html_e( 'Advanced — email variables', 'memberpress-gift-reporter' ); ?></summary>
+									<p class="description" style="margin-top: 8px;">
+										<?php esc_html_e( 'Subject variables: {$product_name}, {$site_name}, {$blogname}, {$user_login}, {$user_email}, {$user_first_name}, {$user_last_name}', 'memberpress-gift-reporter' ); ?>
+									</p>
+								</details>
 							</td>
 						</tr>
 
@@ -652,9 +656,13 @@ class MPGR_Admin {
 								);
 								wp_editor( $gifter_email_body, $editor_id, $editor_settings );
 								?>
+								<details class="mpgr-advanced-vars" style="margin-top: 8px;">
+									<summary><?php esc_html_e( 'Advanced — email variables', 'memberpress-gift-reporter' ); ?></summary>
+									<p class="description" style="margin-top: 8px;">
+										<?php esc_html_e( 'Body variables: {$product_name}, {$redemption_link}, {$site_name}, {$blogname}, {$user_login}, {$user_email}, {$user_first_name}, {$user_last_name}', 'memberpress-gift-reporter' ); ?>
+									</p>
+								</details>
 								<p class="description">
-									<?php esc_html_e( 'Customize the reminder email body. Available variables (MemberPress style): {$product_name}, {$redemption_link}, {$site_name}, {$blogname}, {$user_login}, {$user_email}, {$user_first_name}, {$user_last_name}', 'memberpress-gift-reporter' ); ?>
-									<br>
 									<button type="button" class="button button-small mpgr-reset-email-template" style="margin-top: 10px;">
 										<?php esc_html_e( 'Reset to Default', 'memberpress-gift-reporter' ); ?>
 									</button>
