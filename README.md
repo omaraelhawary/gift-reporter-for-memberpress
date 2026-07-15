@@ -16,7 +16,7 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 ## Plugin Information
 
 - **Plugin page:** [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/)
-- **Version:** 1.8.0
+- **Version:** 1.8.1
 - **Requires at least:** WordPress 5.0
 - **Tested up to:** WordPress 7.0
 - **Requires PHP:** 7.4 or higher
@@ -319,6 +319,7 @@ This plugin is licensed under the GPL v2 or later.
 
 Recent versions (full history in [readme.txt](readme.txt) or on [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/#developers)):
 
+- **1.8.1** — Remove development files from the distributed plugin package (rounds/, bin/)
 - **1.8.0** — Tested up to WordPress 7.0; welcome banner, admin-bar pulse, cliffhanger, Monday Pulse, recovery reel, Stuck Gifts arcs, bulk remind shortcut, Reminders tab copy improvements
 - **1.7.0** — Tested up to WordPress 7.0; customizable From Name/Email; centralized filter sanitization; safer CSV export; improved cron cleanup and admin UI
 - **1.6.3** — WordPress 6.7+ translation loading fix (no early textdomain notice)

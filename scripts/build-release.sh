@@ -80,6 +80,8 @@ rsync -a \
   --exclude='SECURITY.md' \
   --exclude='phpcs.xml' \
   --exclude='screenshots/' \
+  --exclude='rounds/' \
+  --exclude='bin/' \
   "${ROOT}/" "${STAGE}/"
 
 (

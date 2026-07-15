@@ -74,6 +74,8 @@ rsync -av --progress "${PLUGIN_DIR}/" "${BUILD_DIR}/${PLUGIN_NAME}/" \
     --exclude='package.json' \
     --exclude='phpcs.xml' \
     --exclude='screenshots/' \
+    --exclude='rounds/' \
+    --exclude='bin/' \
     --exclude='deploy-svn.sh' \
     --exclude='SVN-DEPLOY.md' \
     --exclude='svn-export/'
