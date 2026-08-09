@@ -1354,6 +1354,107 @@ class MPGR_Gift_Report {
     }
 
     /**
+     * Render the per-membership breakdown table.
+     *
+     * @param array $filters Active filters.
+     */
+    private function render_product_breakdown( $filters = array() ) {
+        $breakdown = $this->get_product_breakdown( $filters );
+
+        // Nothing to compare with a single membership, and nothing to show
+        // with none.
+        if ( count( $breakdown ) < 2 ) {
+            return;
+        }
+
+        echo '<div class="mpgr-breakdown">';
+        echo '<h3>' . esc_html__( 'By Membership', 'memberpress-gift-reporter' ) . '</h3>';
+        echo '<div class="mpgr-table-scroll">';
+        echo '<table class="mpgr-table mpgr-breakdown-table">';
+        echo '<thead><tr>';
+        echo '<th>' . esc_html__( 'Membership', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Gifts', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Claimed', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Unclaimed', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Claim Rate', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Revenue', 'memberpress-gift-reporter' ) . '</th>';
+        echo '</tr></thead><tbody>';
+
+        foreach ( $breakdown as $product ) {
+            echo '<tr>';
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
+            echo '<td>' . $this->admin_link( $product['product_name'], 'product', $product['product_id'] ) . '</td>';
+            echo '<td>' . esc_html( number_format_i18n( $product['total_gifts'] ) ) . '</td>';
+            echo '<td>' . esc_html( number_format_i18n( $product['claimed_gifts'] ) ) . '</td>';
+            echo '<td>' . esc_html( number_format_i18n( $product['unclaimed_gifts'] ) ) . '</td>';
+            echo '<td>' . esc_html( $product['claim_rate'] ) . '%</td>';
+            echo '<td>' . esc_html( $product['revenue_formatted'] ) . '</td>';
+            echo '</tr>';
+        }
+
+        echo '</tbody></table>';
+        echo '</div>';
+        echo '</div>';
+    }
+
+    /**
+     * Render the purchases-vs-claims trend.
+     *
+     * Drawn with plain markup rather than a charting library: it is a small
+     * series, and the admin page should not pull in a dependency to show it.
+     *
+     * @param array $filters Active filters.
+     */
+    private function render_trend( $filters = array() ) {
+        $trend = $this->get_trend( $filters );
+
+        // A single day is not a trend.
+        if ( count( $trend ) < 2 ) {
+            return;
+        }
+
+        $peak = 1;
+        foreach ( $trend as $point ) {
+            $peak = max( $peak, $point['purchases'], $point['claims'] );
+        }
+
+        echo '<div class="mpgr-trend">';
+        echo '<h3>' . esc_html__( 'Purchases vs Claims', 'memberpress-gift-reporter' ) . '</h3>';
+        echo '<div class="mpgr-trend-legend">';
+        echo '<span class="mpgr-trend-key mpgr-trend-key--purchases">' . esc_html__( 'Purchases', 'memberpress-gift-reporter' ) . '</span>';
+        echo '<span class="mpgr-trend-key mpgr-trend-key--claims">' . esc_html__( 'Claims', 'memberpress-gift-reporter' ) . '</span>';
+        echo '</div>';
+        echo '<div class="mpgr-trend-chart">';
+
+        foreach ( $trend as $point ) {
+            $label = sprintf(
+                /* translators: 1: date, 2: number of purchases, 3: number of claims */
+                __( '%1$s — %2$d purchased, %3$d claimed', 'memberpress-gift-reporter' ),
+                $point['date'],
+                $point['purchases'],
+                $point['claims']
+            );
+
+            echo '<div class="mpgr-trend-day" title="' . esc_attr( $label ) . '">';
+            echo '<div class="mpgr-trend-bars">';
+            printf(
+                '<span class="mpgr-trend-bar mpgr-trend-bar--purchases" style="height:%d%%"></span>',
+                (int) round( ( $point['purchases'] / $peak ) * 100 )
+            );
+            printf(
+                '<span class="mpgr-trend-bar mpgr-trend-bar--claims" style="height:%d%%"></span>',
+                (int) round( ( $point['claims'] / $peak ) * 100 )
+            );
+            echo '</div>';
+            echo '<span class="screen-reader-text">' . esc_html( $label ) . '</span>';
+            echo '</div>';
+        }
+
+        echo '</div>';
+        echo '</div>';
+    }
+
+    /**
      * Count rows matching filters (uses summary aggregation).
      *
      * @param array $filters Active filters.
@@ -1828,18 +1929,165 @@ class MPGR_Gift_Report {
     }
 
     /**
-     * Transient key for a filter set.
+     * Per-membership breakdown for the filtered set.
+     *
+     * The weekly summary email already computed this; the report page had no
+     * equivalent, so the email had better analytics than the dashboard.
      *
      * @param array $filters Active filters.
+     * @return array<int, array<string, mixed>> Rows ordered by gift count.
+     */
+    public function get_product_breakdown( $filters = array() ) {
+        global $wpdb;
+
+        $cache_key = self::summary_cache_key( $filters, 'products' );
+        $cached    = get_transient( $cache_key );
+
+        if ( is_array( $cached ) ) {
+            return $cached;
+        }
+
+        $where_clause = implode( ' AND ', $this->build_where_conditions( $filters ) );
+
+        $is_refunded  = self::SQL_IS_REFUNDED;
+        $not_refunded = 'NOT ( ' . self::SQL_IS_REFUNDED . ' )';
+        $is_claimed   = "COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed'";
+
+        $query = "
+        SELECT
+            gift_product.ID AS product_id,
+            gift_product.post_title AS product_name,
+            COUNT(DISTINCT gifter_txn.id) AS total_gifts,
+            SUM(CASE WHEN {$not_refunded} AND {$is_claimed} THEN 1 ELSE 0 END) AS claimed_gifts,
+            SUM(CASE WHEN {$not_refunded} AND NOT ( {$is_claimed} ) THEN 1 ELSE 0 END) AS unclaimed_gifts,
+            SUM(CASE WHEN {$is_refunded} THEN 1 ELSE 0 END) AS refunded_gifts,
+            SUM(CASE WHEN {$not_refunded} THEN gifter_txn.total ELSE 0 END) AS revenue
+        FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
+        " . $this->get_report_joins_sql() . "
+        WHERE {$where_clause}
+        GROUP BY gift_product.ID, gift_product.post_title
+        ORDER BY total_gifts DESC, gift_product.post_title ASC
+        ";
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        $rows = $wpdb->get_results( $query, ARRAY_A );
+
+        $breakdown = array();
+
+        foreach ( (array) $rows as $row ) {
+            $claimed   = (int) $row['claimed_gifts'];
+            $refunded  = (int) $row['refunded_gifts'];
+            $total     = (int) $row['total_gifts'];
+            $countable = max( 0, $total - $refunded );
+            $revenue   = (float) $row['revenue'];
+
+            $breakdown[] = array(
+                'product_id'        => (int) $row['product_id'],
+                'product_name'      => (string) $row['product_name'],
+                'total_gifts'       => $total,
+                'claimed_gifts'     => $claimed,
+                'unclaimed_gifts'   => (int) $row['unclaimed_gifts'],
+                'refunded_gifts'    => $refunded,
+                // Measured against claimable gifts, matching get_summary().
+                'claim_rate'        => $countable > 0 ? round( ( $claimed / $countable ) * 100, 2 ) : 0,
+                'revenue'           => $revenue,
+                'revenue_formatted' => $this->format_currency( $revenue ),
+            );
+        }
+
+        set_transient( $cache_key, $breakdown, self::SUMMARY_CACHE_TTL );
+
+        return $breakdown;
+    }
+
+    /**
+     * Daily purchases and claims across the filtered period.
+     *
+     * Purchases are keyed by purchase date and claims by redemption date, so
+     * the two series answer "are gifts being bought?" and "are they being
+     * redeemed?" independently rather than attributing a claim to the day the
+     * gift was bought.
+     *
+     * @param array $filters Active filters.
+     * @return array<int, array{date:string,purchases:int,claims:int}> Ordered by date.
+     */
+    public function get_trend( $filters = array() ) {
+        global $wpdb;
+
+        $cache_key = self::summary_cache_key( $filters, 'trend' );
+        $cached    = get_transient( $cache_key );
+
+        if ( is_array( $cached ) ) {
+            return $cached;
+        }
+
+        $where_clause = implode( ' AND ', $this->build_where_conditions( $filters ) );
+        $joins        = $this->get_report_joins_sql();
+        $not_refunded = 'NOT ( ' . self::SQL_IS_REFUNDED . ' )';
+        $is_claimed   = "COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed'";
+
+        $purchases_query = "
+        SELECT DATE(gifter_txn.created_at) AS day, COUNT(DISTINCT gifter_txn.id) AS total
+        FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
+        {$joins}
+        WHERE {$where_clause} AND {$not_refunded}
+        GROUP BY DATE(gifter_txn.created_at)
+        ";
+
+        $claims_query = "
+        SELECT DATE(redemption_txn.created_at) AS day, COUNT(DISTINCT gifter_txn.id) AS total
+        FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
+        {$joins}
+        WHERE {$where_clause} AND {$not_refunded} AND {$is_claimed}
+          AND redemption_txn.created_at IS NOT NULL
+        GROUP BY DATE(redemption_txn.created_at)
+        ";
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        $purchases = $wpdb->get_results( $purchases_query, ARRAY_A );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        $claims = $wpdb->get_results( $claims_query, ARRAY_A );
+
+        $series = array();
+
+        foreach ( (array) $purchases as $row ) {
+            $series[ $row['day'] ]['purchases'] = (int) $row['total'];
+        }
+
+        foreach ( (array) $claims as $row ) {
+            $series[ $row['day'] ]['claims'] = (int) $row['total'];
+        }
+
+        ksort( $series );
+
+        $trend = array();
+        foreach ( $series as $day => $counts ) {
+            $trend[] = array(
+                'date'      => (string) $day,
+                'purchases' => isset( $counts['purchases'] ) ? $counts['purchases'] : 0,
+                'claims'    => isset( $counts['claims'] ) ? $counts['claims'] : 0,
+            );
+        }
+
+        set_transient( $cache_key, $trend, self::SUMMARY_CACHE_TTL );
+
+        return $trend;
+    }
+
+    /**
+     * Transient key for a filter set.
+     *
+     * @param array  $filters Active filters.
+     * @param string $bucket  Which cached aggregate the key is for.
      * @return string
      */
-    private static function summary_cache_key( $filters ) {
+    private static function summary_cache_key( $filters, $bucket = 'summary' ) {
         $filters = is_array( $filters ) ? $filters : array();
 
         // Sort so the same filters in a different order share one entry.
         ksort( $filters );
 
-        return 'mpgr_summary_' . md5( self::summary_cache_version() . '|' . wp_json_encode( $filters ) );
+        return 'mpgr_summary_' . md5( $bucket . '|' . self::summary_cache_version() . '|' . wp_json_encode( $filters ) );
     }
 
     /**
@@ -2260,6 +2508,9 @@ class MPGR_Gift_Report {
 		}
 		echo '</div>';
         echo '</div>';
+
+        $this->render_product_breakdown( $filters );
+        $this->render_trend( $filters );
 
 		if ( $total_rows > 0 ) {
 			echo '<p class="mpgr-result-count">';

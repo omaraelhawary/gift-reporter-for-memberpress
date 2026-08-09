@@ -498,6 +498,94 @@
     cursor: help;
 }
 
+/* Per-membership breakdown */
+.mpgr-breakdown,
+.mpgr-trend {
+    margin: 25px 0;
+    padding: 20px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+}
+
+.mpgr-breakdown h3,
+.mpgr-trend h3 {
+    margin-top: 0;
+    color: #0073aa;
+    font-size: 18px;
+}
+
+.mpgr-breakdown-table {
+    min-width: 0;
+}
+
+/* Purchases vs claims trend */
+.mpgr-trend-legend {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: #495057;
+}
+
+.mpgr-trend-key::before {
+    content: "";
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-right: 6px;
+    border-radius: 2px;
+    vertical-align: -1px;
+}
+
+.mpgr-trend-key--purchases::before {
+    background: #2271b1;
+}
+
+.mpgr-trend-key--claims::before {
+    background: #28a745;
+}
+
+.mpgr-trend-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    height: 120px;
+    overflow-x: auto;
+    padding-top: 4px;
+}
+
+.mpgr-trend-day {
+    flex: 1 0 14px;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    cursor: help;
+}
+
+.mpgr-trend-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    width: 100%;
+    height: 100%;
+}
+
+.mpgr-trend-bar {
+    display: block;
+    flex: 1;
+    min-height: 2px;
+    border-radius: 2px 2px 0 0;
+}
+
+.mpgr-trend-bar--purchases {
+    background: #2271b1;
+}
+
+.mpgr-trend-bar--claims {
+    background: #28a745;
+}
+
 /* Action buttons */
 .mpgr-actions {
     white-space: nowrap;
