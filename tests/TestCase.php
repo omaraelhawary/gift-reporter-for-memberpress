@@ -119,10 +119,16 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 	/**
 	 * Insert a gift purchase transaction plus the meta the report keys off.
 	 *
+	 * The coupon is linked through '_gift_coupon_id' meta only; the row's own
+	 * coupon_id column stays NULL, matching how the Gifting add-on records a
+	 * purchase. Setting it here would make the report's redemption_pick derived
+	 * table select the gift itself as its own redemption, silently killing the
+	 * recipient join.
+	 *
 	 * @param array $args {
 	 *     @type int    $user_id     Gifter user ID.
 	 *     @type int    $product_id  Membership post ID.
-	 *     @type int    $coupon_id   Gift coupon post ID.
+	 *     @type int    $coupon_id   Gift coupon post ID (stored as meta).
 	 *     @type string $status      Transaction status ('complete', 'refunded', ...).
 	 *     @type string $gift_status '_gift_status' meta value ('unclaimed'/'claimed').
 	 *     @type float  $total       Transaction total.
@@ -151,7 +157,7 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 			array(
 				'user_id'    => (int) $args['user_id'],
 				'product_id' => (int) $args['product_id'],
-				'coupon_id'  => $args['coupon_id'],
+				'coupon_id'  => null,
 				'amount'     => (float) $args['total'],
 				'total'      => (float) $args['total'],
 				'status'     => $args['status'],
@@ -171,6 +177,51 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 		}
 
 		return $transaction_id;
+	}
+
+	/**
+	 * Insert the redemption transaction that marks a gift as claimed.
+	 *
+	 * Unlike the purchase, this row does carry coupon_id -- that is what the
+	 * report's redemption_pick derived table matches on to find the recipient.
+	 *
+	 * @param int   $coupon_id Gift coupon post ID.
+	 * @param array $args {
+	 *     @type int    $user_id    Recipient user ID.
+	 *     @type int    $product_id Membership post ID.
+	 *     @type float  $total      Transaction total.
+	 *     @type string $created_at MySQL datetime of the redemption.
+	 * }
+	 * @return int Inserted transaction ID.
+	 */
+	protected function create_redemption_transaction( $coupon_id, array $args = array() ) {
+		global $wpdb;
+
+		$args = array_merge(
+			array(
+				'user_id'    => 0,
+				'product_id' => 0,
+				'total'      => 100.00,
+				'created_at' => '2026-01-05 10:00:00',
+			),
+			$args
+		);
+
+		$wpdb->insert(
+			$wpdb->prefix . 'mepr_transactions',
+			array(
+				'user_id'    => (int) $args['user_id'],
+				'product_id' => (int) $args['product_id'],
+				'coupon_id'  => (int) $coupon_id,
+				'amount'     => (float) $args['total'],
+				'total'      => (float) $args['total'],
+				'status'     => 'complete',
+				'trans_num'  => 'REDEEM-' . wp_generate_password( 8, false ),
+				'created_at' => $args['created_at'],
+			)
+		);
+
+		return (int) $wpdb->insert_id;
 	}
 
 	/**
