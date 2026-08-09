@@ -1746,17 +1746,21 @@ class MPGR_Gift_Report {
         $id_placeholders  = implode( ', ', array_fill( 0, count( $transaction_ids ), '%d' ) );
         $key_placeholders = implode( ', ', array_fill( 0, count( $all_keys ), '%s' ) );
 
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Placeholders built from counts; values passed to prepare().
-        $rows = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT transaction_id, meta_key, meta_value
-                 FROM {$wpdb->prefix}mepr_transaction_meta
-                 WHERE transaction_id IN ({$id_placeholders})
-                   AND meta_key IN ({$key_placeholders})",
-                array_merge( $transaction_ids, $all_keys )
-            ),
-            ARRAY_A
-        );
+        // The only interpolated parts are the placeholder lists, built from
+        // array counts rather than from any input; every value itself goes
+        // through prepare() below.
+        // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $sql = "SELECT transaction_id, meta_key, meta_value
+                FROM {$wpdb->prefix}mepr_transaction_meta
+                WHERE transaction_id IN ({$id_placeholders})
+                  AND meta_key IN ({$key_placeholders})";
+        // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is the literal assembled just above; all values are passed here.
+        $prepared = $wpdb->prepare( $sql, array_merge( $transaction_ids, $all_keys ) );
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Prepared immediately above.
+        $rows = $wpdb->get_results( $prepared, ARRAY_A );
 
         $by_transaction = array();
         foreach ( (array) $rows as $row ) {

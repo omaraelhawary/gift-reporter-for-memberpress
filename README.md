@@ -16,7 +16,7 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 ## Plugin Information
 
 - **Plugin page:** [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/)
-- **Version:** 1.8.1
+- **Version:** 1.9.0
 - **Requires at least:** WordPress 5.0
 - **Tested up to:** WordPress 7.0
 - **Requires PHP:** 7.4 or higher
@@ -49,16 +49,19 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
   - Fully customizable email templates with variable support
   - Test email functionality to preview emails
   - Theme override support for email templates
-- **Advanced Filtering System**: 10 powerful filters for precise data analysis
+- **Advanced Filtering System**: 11 powerful filters for precise data analysis
   - Date range filtering (purchase and redemption dates)
-  - Gift status filtering (claimed/unclaimed)
+  - Gift status filtering (claimed/unclaimed/refunded)
   - Product/membership filtering
   - Email filtering (gifter and recipient)
+  - Coupon code filtering (partial match, for support lookups)
   - Transaction ID filtering (purchase and claim transactions)
 - **Smart Data Detection**: Intelligent messaging for no-data scenarios
 - **Comprehensive Reports**: View detailed gift transaction data
+- **Analytics**: Average time-to-claim, per-membership breakdown, and a purchases-vs-claims trend
+- **Reminder Send Log**: Per-gift record of every reminder attempt, including failures
 - **Filtered CSV Export**: Export only filtered data, not all data
-- **REST API**: Programmatic access to report data
+- **REST API**: Paginated programmatic access, usable with Application Passwords
 - **Modern Admin Interface**: Clean, responsive, and user-friendly dashboard with tabbed navigation
 - **Mobile Optimized**: Touch-friendly interface for all devices
 - **Security**: Admin-only access with proper permissions
@@ -116,7 +119,15 @@ The plugin has two main tabs: **Gift Report** and **Reminders**.
 
 ### REST API
 
-Endpoints require a logged-in administrator (`manage_options`) and a valid WordPress REST nonce (`wp_rest`).
+Endpoints require an administrator (`manage_options`). Browser requests authenticated by login cookie must also send a valid `wp_rest` nonce; requests authenticated another way — an Application Password, for example — do not, since they carry their own credentials and cannot obtain a nonce.
+
+The report endpoint is paginated: pass `page` and `per_page` (default 100, max 200). Responses include `total` and `total_pages`, and set the `X-WP-Total` and `X-WP-TotalPages` headers.
+
+```bash
+# From outside WordPress, with an Application Password
+curl -u admin:xxxx-xxxx-xxxx-xxxx \
+  "https://example.com/wp-json/mpgr/v1/report?per_page=50&page=2"
+```
 
 ```php
 $response = wp_remote_get(
@@ -170,7 +181,9 @@ The plugin tracks and reports on:
 ### Summary Statistics
 - Total gifts purchased (filtered)
 - Claimed vs unclaimed gifts (filtered)
+- Refunded gifts, excluded from revenue and claim rate (filtered)
 - Claim rate percentage (filtered)
+- Average time to claim (filtered)
 - Total revenue generated (filtered)
 
 ### Advanced Filtering
@@ -319,6 +332,7 @@ This plugin is licensed under the GPL v2 or later.
 
 Recent versions (full history in [readme.txt](readme.txt) or on [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/#developers)):
 
+- **1.9.0** — Refunded-gift accounting fixes, Application Password REST auth, full uninstall cleanup, locale-aware table labels, coupon code filter, time-to-claim metric, per-membership breakdown and trend, reminder send log, REST pagination, cached summaries
 - **1.8.1** — Remove development files from the distributed plugin package (rounds/, bin/)
 - **1.8.0** — Tested up to WordPress 7.0; welcome banner, admin-bar pulse, cliffhanger, Monday Pulse, recovery reel, Stuck Gifts arcs, bulk remind shortcut, Reminders tab copy improvements
 - **1.7.0** — Tested up to WordPress 7.0; customizable From Name/Email; centralized filter sanitization; safer CSV export; improved cron cleanup and admin UI
