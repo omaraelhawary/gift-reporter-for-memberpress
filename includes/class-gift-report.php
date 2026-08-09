@@ -53,6 +53,15 @@ class MPGR_Gift_Report {
     private const SUMMARY_VERSION_OPTION = 'mpgr_summary_cache_version';
 
     /**
+     * Default and maximum rows per REST page.
+     *
+     * The ceiling keeps one request from re-running the join set over an
+     * unbounded row count; clients that want everything should page.
+     */
+    private const REST_DEFAULT_PER_PAGE = 100;
+    private const REST_MAX_PER_PAGE     = 200;
+
+    /**
      * Plugin instance.
      *
      * @var self|null
@@ -638,7 +647,7 @@ class MPGR_Gift_Report {
             'methods' => 'GET',
             'callback' => array($this, 'rest_get_report'),
             'permission_callback' => array($this, 'rest_permission_check'),
-            'args' => self::get_rest_filter_args(),
+            'args' => array_merge( self::get_rest_filter_args(), self::get_rest_pagination_args() ),
         ));
         
         register_rest_route('mpgr/v1', '/export', array(
@@ -647,6 +656,46 @@ class MPGR_Gift_Report {
             'permission_callback' => array($this, 'rest_permission_check'),
             'args' => self::get_rest_filter_args(),
         ));
+    }
+
+    /**
+     * REST argument definitions for pagination params.
+     *
+     * @return array
+     */
+    public static function get_rest_pagination_args() {
+        return array(
+            'page'     => array(
+                'required'          => false,
+                'default'           => 1,
+                'sanitize_callback' => 'absint',
+            ),
+            'per_page' => array(
+                'required'          => false,
+                'default'           => self::REST_DEFAULT_PER_PAGE,
+                'sanitize_callback' => 'absint',
+            ),
+        );
+    }
+
+    /**
+     * Clamp a requested page size into the supported range.
+     *
+     * Out-of-range values are clamped rather than rejected, and the response
+     * reports the size actually used, so a client asking for 5000 gets a
+     * working answer it can page through instead of a 400.
+     *
+     * @param mixed $per_page Requested page size.
+     * @return int
+     */
+    private static function clamp_per_page( $per_page ) {
+        $per_page = (int) $per_page;
+
+        if ( $per_page < 1 ) {
+            return self::REST_DEFAULT_PER_PAGE;
+        }
+
+        return min( $per_page, self::REST_MAX_PER_PAGE );
     }
 
     /**
@@ -761,15 +810,41 @@ class MPGR_Gift_Report {
      */
     public function rest_get_report( $request ) {
         try {
-            $filters = self::sanitize_filters( $request );
-            $data    = $this->generate_report( 1000, 0, $filters, $this->get_default_sort_clause() );
-            $summary = $this->get_summary( $filters );
+            $filters  = self::sanitize_filters( $request );
+            $per_page = self::clamp_per_page( $request->get_param( 'per_page' ) );
+            $page     = max( 1, (int) $request->get_param( 'page' ) );
 
-            return array(
-                'success' => true,
-                'data'    => $data,
-                'summary' => $summary,
+            // Cached, so asking for the total costs nothing beyond the first
+            // page of a given filter set.
+            $summary     = $this->get_summary( $filters );
+            $total       = isset( $summary['total_gifts'] ) ? (int) $summary['total_gifts'] : 0;
+            $total_pages = (int) ceil( $total / $per_page );
+
+            $data = $this->generate_report(
+                $per_page,
+                ( $page - 1 ) * $per_page,
+                $filters,
+                $this->get_default_sort_clause()
             );
+
+            $response = new WP_REST_Response(
+                array(
+                    'success'     => true,
+                    'data'        => $data,
+                    'summary'     => $summary,
+                    'page'        => $page,
+                    'per_page'    => $per_page,
+                    'total'       => $total,
+                    'total_pages' => $total_pages,
+                )
+            );
+
+            // The conventional WordPress pagination headers, so generic REST
+            // clients can page without reading the body.
+            $response->header( 'X-WP-Total', (string) $total );
+            $response->header( 'X-WP-TotalPages', (string) $total_pages );
+
+            return $response;
         } catch ( Exception $e ) {
             return new WP_Error( 'report_error', 'Unable to generate report', array( 'status' => 500 ) );
         }
