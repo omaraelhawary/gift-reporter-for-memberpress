@@ -34,6 +34,7 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 		}
 
 		$this->ensure_memberpress_meta_table();
+		$this->ensure_memberpress_transactions_table();
 	}
 
 	/**
@@ -60,6 +61,168 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->query( "TRUNCATE TABLE {$table}" );
+	}
+
+	/**
+	 * Create a minimal MemberPress transactions table for tests.
+	 *
+	 * Only the columns the report queries touch are defined; MemberPress itself
+	 * ships a wider schema.
+	 */
+	protected function ensure_memberpress_transactions_table() {
+		global $wpdb;
+
+		$table   = $wpdb->prefix . 'mepr_transactions';
+		$charset = $wpdb->get_charset_collate();
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange
+		$wpdb->query(
+			"CREATE TABLE IF NOT EXISTS {$table} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				user_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				product_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				coupon_id bigint(20) unsigned DEFAULT NULL,
+				amount decimal(14,2) NOT NULL DEFAULT 0.00,
+				total decimal(14,2) NOT NULL DEFAULT 0.00,
+				status varchar(32) NOT NULL DEFAULT 'pending',
+				trans_num varchar(255) DEFAULT NULL,
+				created_at datetime DEFAULT NULL,
+				PRIMARY KEY (id),
+				KEY user_id (user_id),
+				KEY coupon_id (coupon_id),
+				KEY status (status)
+			) {$charset}"
+		);
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$wpdb->query( "TRUNCATE TABLE {$table}" );
+	}
+
+	/**
+	 * Insert a gift purchase transaction plus the meta the report keys off.
+	 *
+	 * @param array $args {
+	 *     @type int    $user_id     Gifter user ID.
+	 *     @type int    $product_id  Membership post ID.
+	 *     @type int    $coupon_id   Gift coupon post ID.
+	 *     @type string $status      Transaction status ('complete', 'refunded', ...).
+	 *     @type string $gift_status '_gift_status' meta value ('unclaimed'/'claimed').
+	 *     @type float  $total       Transaction total.
+	 *     @type string $created_at  MySQL datetime.
+	 * }
+	 * @return int Inserted transaction ID.
+	 */
+	protected function create_gift_transaction( array $args = array() ) {
+		global $wpdb;
+
+		$args = array_merge(
+			array(
+				'user_id'     => 0,
+				'product_id'  => 0,
+				'coupon_id'   => null,
+				'status'      => 'complete',
+				'gift_status' => 'unclaimed',
+				'total'       => 100.00,
+				'created_at'  => '2026-01-01 10:00:00',
+			),
+			$args
+		);
+
+		$wpdb->insert(
+			$wpdb->prefix . 'mepr_transactions',
+			array(
+				'user_id'    => (int) $args['user_id'],
+				'product_id' => (int) $args['product_id'],
+				'coupon_id'  => $args['coupon_id'],
+				'amount'     => (float) $args['total'],
+				'total'      => (float) $args['total'],
+				'status'     => $args['status'],
+				'trans_num'  => 'TEST-' . wp_generate_password( 8, false ),
+				'created_at' => $args['created_at'],
+			)
+		);
+
+		$transaction_id = (int) $wpdb->insert_id;
+
+		if ( null !== $args['gift_status'] ) {
+			$this->add_transaction_meta( $transaction_id, '_gift_status', $args['gift_status'] );
+		}
+
+		if ( ! empty( $args['coupon_id'] ) ) {
+			$this->add_transaction_meta( $transaction_id, '_gift_coupon_id', (string) $args['coupon_id'] );
+		}
+
+		return $transaction_id;
+	}
+
+	/**
+	 * Insert one MemberPress transaction meta row.
+	 *
+	 * @param int    $transaction_id Transaction ID.
+	 * @param string $meta_key       Meta key.
+	 * @param string $meta_value     Meta value.
+	 */
+	protected function add_transaction_meta( $transaction_id, $meta_key, $meta_value ) {
+		global $wpdb;
+
+		$wpdb->insert(
+			$wpdb->prefix . 'mepr_transaction_meta',
+			array(
+				'transaction_id' => (int) $transaction_id,
+				'meta_key'       => $meta_key,
+				'meta_value'     => $meta_value,
+			)
+		);
+	}
+
+	/**
+	 * Run an AJAX handler that ends in wp_send_json_*() and capture its output.
+	 *
+	 * This class extends WP_UnitTestCase, which — unlike WP_Ajax_UnitTestCase —
+	 * installs no wp_die() handler. Without one, a handler ending in
+	 * wp_send_json_success() reaches the default handler and calls die(),
+	 * terminating the whole PHPUnit process with exit code 0: the run stops
+	 * mid-suite and still looks like a pass. Filtering the die handlers turns
+	 * that exit into a catchable exception.
+	 *
+	 * @param callable $callback Handler to invoke.
+	 * @return string The JSON body the handler emitted.
+	 */
+	protected function run_ajax_handler( callable $callback ) {
+		$die_handler = static function () {
+			return static function () {
+				throw new WPAjaxDieContinueException( '' );
+			};
+		};
+
+		$filters = array( 'wp_die_handler', 'wp_die_ajax_handler', 'wp_die_json_handler', 'wp_die_jsonp_handler' );
+
+		add_filter( 'wp_doing_ajax', '__return_true' );
+		foreach ( $filters as $filter ) {
+			add_filter( $filter, $die_handler, 1 );
+		}
+
+		$died    = false;
+		$response = '';
+
+		ob_start();
+		try {
+			$callback();
+		} catch ( WPAjaxDieContinueException $e ) {
+			unset( $e );
+			$died = true;
+		} finally {
+			$response = ob_get_clean();
+
+			remove_filter( 'wp_doing_ajax', '__return_true' );
+			foreach ( $filters as $filter ) {
+				remove_filter( $filter, $die_handler, 1 );
+			}
+		}
+
+		$this->assertTrue( $died, 'Expected the AJAX handler to terminate via wp_die().' );
+
+		return $response;
 	}
 
 	/**

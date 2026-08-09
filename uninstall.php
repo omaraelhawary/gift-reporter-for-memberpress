@@ -22,6 +22,12 @@ delete_option( 'mpgr_weekly_summary_settings' );
 delete_option( 'mpgr_cron_migrated_v1_6_3' );
 delete_option( 'mpgr_cron_migrated_v1_6_4' );
 delete_option( 'mpgr_legacy_cron_cleaned_v1_6_3' );
+delete_option( 'mpgr_activation_ts' );
+delete_option( 'mpgr_last_report_snapshot' );
+
+// Delete cached report data (onboarding pulse and aging arcs).
+delete_transient( 'mpgr_pulse_stats' );
+delete_transient( 'mpgr_aging_arcs' );
 
 // Clear scheduled cron events created by this plugin.
 wp_clear_scheduled_hook( 'mpgr_run_gift_reminders' );
@@ -40,6 +46,20 @@ $mepr_meta_table = $wpdb->prefix . 'mepr_transaction_meta';
 $wpdb->query(
 	"DELETE FROM {$mepr_meta_table}
 	 WHERE meta_key IN ('_mpgr_reminder_sent_count', '_mpgr_last_reminder_ts', '_mpgr_reminder_sent')"
+);
+
+// Delete per-user onboarding meta rows. Keys are listed explicitly rather than
+// matched with LIKE 'mpgr_%' so unrelated meta can never be caught by mistake.
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Uninstall cleanup of plugin-owned meta rows
+$wpdb->query(
+	"DELETE FROM {$wpdb->usermeta}
+	 WHERE meta_key IN (
+		'mpgr_welcome_dismissed',
+		'mpgr_admin_bar_dismissed',
+		'mpgr_cliffhanger_snooze',
+		'mpgr_monday_pulse_dismissed',
+		'mpgr_report_viewed'
+	 )"
 );
 
 // Delete per-user rate-limit transients.

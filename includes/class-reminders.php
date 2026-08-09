@@ -233,7 +233,11 @@ class MPGR_Reminders {
 	public static function get_email_headers() {
 		$settings   = self::get_settings();
 		$from_name  = ! empty( $settings['from_name'] ) ? $settings['from_name'] : get_bloginfo( 'name' );
-		$from_name  = sanitize_text_field( preg_replace( '/[\r\n]+/', '', $from_name ) );
+		// Truncate at the first line break rather than deleting it: removing the
+		// newline from "Evil\r\nBcc: attacker@example.com" would prevent header
+		// injection but leave "EvilBcc: attacker@example.com" as the display
+		// name. Anything after a line break was never a legitimate from name.
+		$from_name  = sanitize_text_field( preg_replace( '/[\r\n].*$/s', '', $from_name ) );
 		$from_email = ( ! empty( $settings['from_email'] ) && is_email( $settings['from_email'] ) )
 			? sanitize_email( $settings['from_email'] )
 			: get_option( 'admin_email' );

@@ -16,6 +16,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 class MPGR_Gift_Report {
 
     /**
+     * SQL predicate matching a refunded gift purchase.
+     *
+     * Refunded purchases stay listed in the report so they can be found and
+     * reconciled, but they are excluded from revenue totals, the claim rate,
+     * and the unclaimed count, and they are never emailed a reminder. That is
+     * the same rule MPGR_Reminders and MPGR_Weekly_Summary already apply by
+     * selecting only 'complete' and 'confirmed' transactions.
+     */
+    private const SQL_IS_REFUNDED = "gifter_txn.status = 'refunded'";
+
+    /**
+     * Gift status value used for refunded purchases.
+     *
+     * Kept distinct from the '_gift_status' meta values ('claimed' /
+     * 'unclaimed'), which the Gifting add-on does not change on refund.
+     */
+    private const STATUS_REFUNDED = 'refunded';
+
+    /**
      * Plugin instance.
      *
      * @var self|null
@@ -249,6 +268,13 @@ class MPGR_Gift_Report {
         }
 
         if ( $require_unclaimed ) {
+            // A refund does not change '_gift_status', so the meta check below
+            // would happily pass a refunded purchase through and email its
+            // gifter about a gift they no longer own. Check the transaction too.
+            if ( self::STATUS_REFUNDED === $gift_transaction->status ) {
+                return array( 'success' => false, 'error' => 'refunded' );
+            }
+
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             $gift_status = $wpdb->get_var(
                 $wpdb->prepare(
@@ -485,6 +511,21 @@ class MPGR_Gift_Report {
 
 		foreach ( $gift_transaction_ids as $gift_transaction_id ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$transaction_status = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT status FROM {$wpdb->prefix}mepr_transactions WHERE id = %d",
+					$gift_transaction_id
+				)
+			);
+
+			// A refund leaves '_gift_status' as 'unclaimed', so this has to be
+			// checked separately or refunded gifts get reminder emails.
+			if ( self::STATUS_REFUNDED === $transaction_status ) {
+				++$skipped_count;
+				continue;
+			}
+
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 			$gift_status = $wpdb->get_var(
 				$wpdb->prepare(
 					"SELECT meta_value FROM {$wpdb->prefix}mepr_transaction_meta
@@ -617,19 +658,47 @@ class MPGR_Gift_Report {
         if (!is_user_logged_in() || !current_user_can('manage_options')) {
             return false;
         }
-        
-        // Verify WordPress REST nonce (X-WP-Nonce header or nonce query param).
-        $nonce = $request->get_header( 'X-WP-Nonce' ) ?: $request->get_param( 'nonce' );
-        if ( ! $nonce || ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
-            return false;
+
+        /*
+         * Verify the WordPress REST nonce, but only for cookie-authenticated
+         * requests. The nonce is CSRF protection: it exists because a browser
+         * attaches its login cookie to cross-site requests automatically. A
+         * request authenticated by Application Password (or any other scheme
+         * that carries its own credentials) has no ambient credential to abuse,
+         * and no way to obtain a nonce in the first place. Requiring one there
+         * blocked every non-browser client from the endpoint.
+         *
+         * Core makes the same distinction in rest_cookie_check_errors(), which
+         * already drops a nonce-less cookie request to user 0 before this
+         * callback runs; the check below is kept as defence in depth.
+         */
+        if ( self::request_has_auth_cookie() ) {
+            $nonce = $request->get_header( 'X-WP-Nonce' ) ?: $request->get_param( 'nonce' );
+            if ( ! $nonce || ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+                return false;
+            }
         }
-        
+
         // Add rate limiting check
         if ($this->is_rate_limited()) {
             return false;
         }
-        
+
         return true;
+    }
+
+    /**
+     * Whether the current request carries a WordPress login cookie.
+     *
+     * Presence of the cookie — not the identity of the authenticated user — is
+     * what makes a request CSRF-able, so this deliberately errs toward
+     * requiring a nonce: a client sending both a cookie and an Application
+     * Password is still treated as a cookie request.
+     *
+     * @return bool
+     */
+    private static function request_has_auth_cookie() {
+        return false !== wp_parse_auth_cookie( '', 'logged_in' );
     }
     
     /**
@@ -807,8 +876,20 @@ class MPGR_Gift_Report {
         }
 
         if ( ! empty( $filters['gift_status'] ) ) {
-            $gift_status        = sanitize_text_field( $filters['gift_status'] );
-            $where_conditions[] = $wpdb->prepare( "COALESCE(gift_status.meta_value, 'unclaimed') = %s", $gift_status );
+            $gift_status = sanitize_text_field( $filters['gift_status'] );
+
+            if ( self::STATUS_REFUNDED === $gift_status ) {
+                $where_conditions[] = self::SQL_IS_REFUNDED;
+            } else {
+                // Refunded purchases keep their original '_gift_status' meta, so
+                // they must be excluded here or they would show up under both
+                // 'unclaimed' and 'refunded'. The constant is appended to the
+                // prepared result so prepare() still receives a literal.
+                $where_conditions[] = $wpdb->prepare(
+                    "COALESCE(gift_status.meta_value, 'unclaimed') = %s",
+                    $gift_status
+                ) . ' AND NOT ( ' . self::SQL_IS_REFUNDED . ' )';
+            }
         }
 
         if ( ! empty( $filters['product'] ) ) {
@@ -1194,8 +1275,11 @@ class MPGR_Gift_Report {
             coupon_meta.meta_value AS coupon_id,
             COALESCE(gift_coupon.post_title, 'Deleted Coupon') AS coupon_code,
             
-            COALESCE(gift_status.meta_value, 'unclaimed') AS gift_status,
-            
+            CASE
+                WHEN " . self::SQL_IS_REFUNDED . " THEN '" . self::STATUS_REFUNDED . "'
+                ELSE COALESCE(gift_status.meta_value, 'unclaimed')
+            END AS gift_status,
+
             redemption_txn.id AS redemption_transaction_id,
             redemption_txn.created_at AS redemption_date,
             redemption_txn.trans_num AS redemption_transaction_number,
@@ -1206,10 +1290,10 @@ class MPGR_Gift_Report {
             recipient_fname.meta_value AS recipient_first_name,
             recipient_lname.meta_value AS recipient_last_name,
             
-            CASE 
+            CASE
+                WHEN " . self::SQL_IS_REFUNDED . " THEN 'Invalid (Refunded)'
                 WHEN gift_status.meta_value = 'claimed' THEN 'Claimed'
                 WHEN gift_status.meta_value = 'unclaimed' THEN 'Unclaimed'
-                WHEN gifter_txn.status = 'refunded' THEN 'Invalid (Refunded)'
                 ELSE 'Unknown'
             END AS gift_status_display,
             
@@ -1398,6 +1482,12 @@ class MPGR_Gift_Report {
     
     /**
      * Get summary statistics
+     *
+     * Refunded purchases are counted in 'total_gifts' and broken out as
+     * 'refunded_gifts', but are excluded from the claimed/unclaimed counts, the
+     * revenue totals, and the claim rate. 'total_gifts' therefore equals
+     * claimed + unclaimed + refunded, while 'claim_rate' is measured against
+     * non-refunded gifts only.
      */
     public function get_summary($filters = array()) {
         global $wpdb;
@@ -1405,13 +1495,19 @@ class MPGR_Gift_Report {
         $where_conditions = $this->build_where_conditions( $filters );
         $where_clause     = implode( ' AND ', $where_conditions );
 
+        $is_refunded  = self::SQL_IS_REFUNDED;
+        $not_refunded = 'NOT ( ' . self::SQL_IS_REFUNDED . ' )';
+        $is_claimed   = "COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed'";
+
         $summary_query = "
         SELECT
             COUNT(DISTINCT gifter_txn.id) AS total_gifts,
-            SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed' THEN 1 ELSE 0 END) AS claimed_gifts,
-            SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') != 'claimed' THEN 1 ELSE 0 END) AS unclaimed_gifts,
-            SUM(gifter_txn.total) AS total_revenue,
-            SUM(CASE WHEN COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed' THEN gifter_txn.total ELSE 0 END) AS claimed_revenue
+            SUM(CASE WHEN {$not_refunded} AND {$is_claimed} THEN 1 ELSE 0 END) AS claimed_gifts,
+            SUM(CASE WHEN {$not_refunded} AND NOT ( {$is_claimed} ) THEN 1 ELSE 0 END) AS unclaimed_gifts,
+            SUM(CASE WHEN {$is_refunded} THEN 1 ELSE 0 END) AS refunded_gifts,
+            SUM(CASE WHEN {$not_refunded} THEN gifter_txn.total ELSE 0 END) AS total_revenue,
+            SUM(CASE WHEN {$not_refunded} AND {$is_claimed} THEN gifter_txn.total ELSE 0 END) AS claimed_revenue,
+            SUM(CASE WHEN {$is_refunded} THEN gifter_txn.total ELSE 0 END) AS refunded_revenue
         FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
         " . $this->get_report_joins_sql() . "
         WHERE {$where_clause}
@@ -1423,18 +1519,27 @@ class MPGR_Gift_Report {
         $total     = isset( $row['total_gifts'] ) ? (int) $row['total_gifts'] : 0;
         $claimed   = isset( $row['claimed_gifts'] ) ? (int) $row['claimed_gifts'] : 0;
         $unclaimed = isset( $row['unclaimed_gifts'] ) ? (int) $row['unclaimed_gifts'] : 0;
-        $revenue         = isset( $row['total_revenue'] ) ? (float) $row['total_revenue'] : 0;
-        $claimed_revenue = isset( $row['claimed_revenue'] ) ? (float) $row['claimed_revenue'] : 0;
+        $refunded  = isset( $row['refunded_gifts'] ) ? (int) $row['refunded_gifts'] : 0;
+        $revenue          = isset( $row['total_revenue'] ) ? (float) $row['total_revenue'] : 0;
+        $claimed_revenue  = isset( $row['claimed_revenue'] ) ? (float) $row['claimed_revenue'] : 0;
+        $refunded_revenue = isset( $row['refunded_revenue'] ) ? (float) $row['refunded_revenue'] : 0;
+
+        // Claim rate measures how many *valid* gifts got claimed; a refunded
+        // purchase was never claimable, so counting it would understate the rate.
+        $countable = max( 0, $total - $refunded );
 
         return array(
             'total_gifts'                  => $total,
             'claimed_gifts'                => $claimed,
             'unclaimed_gifts'              => $unclaimed,
-            'claim_rate'                   => $total > 0 ? round( ( $claimed / $total ) * 100, 2 ) : 0,
+            'refunded_gifts'               => $refunded,
+            'claim_rate'                   => $countable > 0 ? round( ( $claimed / $countable ) * 100, 2 ) : 0,
             'total_revenue'                => $revenue,
             'total_revenue_formatted'      => $this->format_currency( $revenue ),
             'claimed_revenue'              => $claimed_revenue,
             'claimed_revenue_formatted'    => $this->format_currency( $claimed_revenue ),
+            'refunded_revenue'             => $refunded_revenue,
+            'refunded_revenue_formatted'   => $this->format_currency( $refunded_revenue ),
         );
     }
 
@@ -1693,6 +1798,7 @@ class MPGR_Gift_Report {
 		echo '<option value="">' . esc_html__( 'All Statuses', 'memberpress-gift-reporter' ) . '</option>';
 		echo '<option value="claimed"' . selected($filters['gift_status'] ?? '', 'claimed', false) . '>' . esc_html__( 'Claimed', 'memberpress-gift-reporter' ) . '</option>';
 		echo '<option value="unclaimed"' . selected($filters['gift_status'] ?? '', 'unclaimed', false) . '>' . esc_html__( 'Unclaimed', 'memberpress-gift-reporter' ) . '</option>';
+		echo '<option value="refunded"' . selected($filters['gift_status'] ?? '', 'refunded', false) . '>' . esc_html__( 'Refunded', 'memberpress-gift-reporter' ) . '</option>';
 		echo '</select>';
 		echo '</div>';
         
@@ -1783,6 +1889,11 @@ class MPGR_Gift_Report {
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Total Gifts:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['total_gifts']) . '</span>';
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Claimed:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['claimed_gifts']) . '</span>';
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Unclaimed:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['unclaimed_gifts']) . '</span>';
+		// Only shown when there are refunds, so the counts still add up to the
+		// total without adding a permanent zero to every site's summary.
+		if ( ! empty( $summary['refunded_gifts'] ) ) {
+			echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Refunded:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['refunded_gifts']) . '</span>';
+		}
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Claim Rate:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['claim_rate']) . '%</span>';
 		echo '</div>';
         echo '</div>';
@@ -1857,6 +1968,7 @@ class MPGR_Gift_Report {
                     case 'unclaimed':
                         $status_class = 'mpgr-unclaimed';
                         break;
+                    case self::STATUS_REFUNDED:
                     default:
                         $status_class = 'mpgr-refunded';
                 }
