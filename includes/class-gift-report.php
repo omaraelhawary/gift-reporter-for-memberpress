@@ -1564,7 +1564,16 @@ class MPGR_Gift_Report {
             SUM(CASE WHEN {$is_refunded} THEN 1 ELSE 0 END) AS refunded_gifts,
             SUM(CASE WHEN {$not_refunded} THEN gifter_txn.total ELSE 0 END) AS total_revenue,
             SUM(CASE WHEN {$not_refunded} AND {$is_claimed} THEN gifter_txn.total ELSE 0 END) AS claimed_revenue,
-            SUM(CASE WHEN {$is_refunded} THEN gifter_txn.total ELSE 0 END) AS refunded_revenue
+            SUM(CASE WHEN {$is_refunded} THEN gifter_txn.total ELSE 0 END) AS refunded_revenue,
+            AVG(
+                CASE
+                    WHEN {$not_refunded}
+                     AND {$is_claimed}
+                     AND redemption_txn.created_at IS NOT NULL
+                     AND redemption_txn.created_at >= gifter_txn.created_at
+                    THEN TIMESTAMPDIFF(HOUR, gifter_txn.created_at, redemption_txn.created_at)
+                END
+            ) AS avg_hours_to_claim
         FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
         " . $this->get_report_joins_sql() . "
         WHERE {$where_clause}
@@ -1585,6 +1594,12 @@ class MPGR_Gift_Report {
         // purchase was never claimable, so counting it would understate the rate.
         $countable = max( 0, $total - $refunded );
 
+        // NULL when nothing in range has been claimed yet -- distinct from a
+        // genuine average of zero, so it is kept nullable rather than cast to 0.
+        $avg_hours = isset( $row['avg_hours_to_claim'] ) && null !== $row['avg_hours_to_claim']
+            ? (float) $row['avg_hours_to_claim']
+            : null;
+
         return array(
             'total_gifts'                  => $total,
             'claimed_gifts'                => $claimed,
@@ -1597,7 +1612,42 @@ class MPGR_Gift_Report {
             'claimed_revenue_formatted'    => $this->format_currency( $claimed_revenue ),
             'refunded_revenue'             => $refunded_revenue,
             'refunded_revenue_formatted'   => $this->format_currency( $refunded_revenue ),
+            'avg_hours_to_claim'           => $avg_hours,
+            'avg_days_to_claim'            => null === $avg_hours ? null : round( $avg_hours / 24, 1 ),
+            'avg_time_to_claim_formatted'  => self::format_duration( $avg_hours ),
         );
+    }
+
+    /**
+     * Human-readable duration for the time-to-claim stat.
+     *
+     * Sub-day averages are reported in hours: a site whose gifts are claimed
+     * within a few hours is badly served by "0.2 days", and this number exists
+     * to make reminder delays tunable.
+     *
+     * @param float|null $hours Average hours, or null when nothing is claimed.
+     * @return string Empty string when there is nothing to report.
+     */
+    public static function format_duration( $hours ) {
+        if ( null === $hours ) {
+            return '';
+        }
+
+        if ( $hours < 24 ) {
+            $rounded = max( 0, (int) round( $hours ) );
+
+            /* translators: %s: number of hours */
+            return sprintf( _n( '%s hour', '%s hours', $rounded, 'memberpress-gift-reporter' ), number_format_i18n( $rounded ) );
+        }
+
+        $days = round( $hours / 24, 1 );
+
+        // Whole numbers read better without a trailing ".0".
+        $decimals  = ( (float) (int) $days === $days ) ? 0 : 1;
+        $formatted = number_format_i18n( $days, $decimals );
+
+        /* translators: %s: number of days */
+        return sprintf( _n( '%s day', '%s days', (int) ceil( $days ), 'memberpress-gift-reporter' ), $formatted );
     }
 
     /**
@@ -1961,6 +2011,10 @@ class MPGR_Gift_Report {
 			echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Refunded:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['refunded_gifts']) . '</span>';
 		}
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Claim Rate:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['claim_rate']) . '%</span>';
+		// Only meaningful once something has been claimed in the filtered range.
+		if ( ! empty( $summary['avg_time_to_claim_formatted'] ) ) {
+			echo '<span class="mpgr-summary-item" title="' . esc_attr__( 'Average time between purchase and redemption. Use it to tune your reminder delays.', 'memberpress-gift-reporter' ) . '"><strong>' . esc_html__( 'Avg. Time to Claim:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['avg_time_to_claim_formatted']) . '</span>';
+		}
 		echo '</div>';
         echo '</div>';
 
