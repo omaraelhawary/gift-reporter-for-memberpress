@@ -1274,7 +1274,7 @@ class MPGR_Gift_Report {
             
             gifter.ID AS gifter_user_id,
             gifter.user_login AS gifter_username,
-            COALESCE(gifter.user_email, 'Deleted User') AS gifter_email,
+            gifter.user_email AS gifter_email,
             COALESCE(gifter_fname.meta_value, '') AS gifter_first_name,
             COALESCE(gifter_lname.meta_value, '') AS gifter_last_name,
             
@@ -1282,7 +1282,7 @@ class MPGR_Gift_Report {
             gift_product.post_title AS product_name,
             
             coupon_meta.meta_value AS coupon_id,
-            COALESCE(gift_coupon.post_title, 'Deleted Coupon') AS coupon_code,
+            gift_coupon.post_title AS coupon_code,
             
             CASE
                 WHEN " . self::SQL_IS_REFUNDED . " THEN '" . self::STATUS_REFUNDED . "'
@@ -1295,20 +1295,13 @@ class MPGR_Gift_Report {
             
             recipient.ID AS recipient_user_id,
             recipient.user_login AS recipient_username,
-            COALESCE(recipient.user_email, 'Deleted User') AS recipient_email,
+            recipient.user_email AS recipient_email,
             recipient_fname.meta_value AS recipient_first_name,
             recipient_lname.meta_value AS recipient_last_name,
             
             CASE
-                WHEN " . self::SQL_IS_REFUNDED . " THEN 'Invalid (Refunded)'
-                WHEN gift_status.meta_value = 'claimed' THEN 'Claimed'
-                WHEN gift_status.meta_value = 'unclaimed' THEN 'Unclaimed'
-                ELSE 'Unknown'
-            END AS gift_status_display,
-            
-            CASE 
-                WHEN gifter.ID IS NULL THEN 'Deleted'
-                ELSE 'Active'
+                WHEN gifter.ID IS NULL THEN 'deleted'
+                ELSE 'active'
             END AS gifter_status,
 
             COALESCE(reminder_count_meta.meta_value, 0) AS reminders_sent,
@@ -1323,9 +1316,91 @@ class MPGR_Gift_Report {
         ";
         
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dynamic query with properly prepared WHERE conditions and LIMIT clause. All user inputs are sanitized and prepared via $wpdb->prepare() before being added to $where_conditions array and $limit_clause. This is a false positive - the query is safe because all dynamic values are properly escaped.
-        $this->report_data = $wpdb->get_results($query, ARRAY_A);
-        
+        $this->report_data = $this->localize_rows( $wpdb->get_results($query, ARRAY_A) );
+
         return $this->report_data;
+    }
+
+    /**
+     * Attach translated labels to raw query rows.
+     *
+     * The query used to bake 'Deleted User', 'Deleted Coupon' and the status
+     * labels in as SQL literals, so the admin table rendered them in English
+     * whatever the site locale -- the CSV export translated them on the way
+     * out, the table did not. The query now returns NULL for a missing user or
+     * coupon and a machine-readable status, and the labels are applied here, in
+     * one place, on every path (table, CSV, REST).
+     *
+     * The *_deleted flags let callers style a missing record without comparing
+     * against a translated string.
+     *
+     * @param array $rows Raw report rows.
+     * @return array Rows with display values filled in.
+     */
+    private function localize_rows( $rows ) {
+        if ( empty( $rows ) || ! is_array( $rows ) ) {
+            return array();
+        }
+
+        foreach ( $rows as $index => $row ) {
+            $status = isset( $row['gift_status'] ) ? $row['gift_status'] : '';
+
+            $gifter_missing = ! isset( $row['gifter_email'] ) || '' === $row['gifter_email'];
+            $coupon_missing = ! isset( $row['coupon_code'] ) || '' === $row['coupon_code'];
+
+            // A recipient only exists once a gift is claimed; an empty one on an
+            // unclaimed row is normal, not a deleted user.
+            $recipient_missing = ( 'claimed' === $status )
+                && ( ! isset( $row['recipient_email'] ) || '' === $row['recipient_email'] );
+
+            $rows[ $index ]['gifter_deleted']    = $gifter_missing;
+            $rows[ $index ]['coupon_deleted']    = $coupon_missing;
+            $rows[ $index ]['recipient_deleted'] = $recipient_missing;
+
+            if ( $gifter_missing ) {
+                $rows[ $index ]['gifter_email'] = __( 'Deleted User', 'memberpress-gift-reporter' );
+            }
+
+            if ( $coupon_missing ) {
+                $rows[ $index ]['coupon_code'] = __( 'Deleted Coupon', 'memberpress-gift-reporter' );
+            }
+
+            if ( $recipient_missing ) {
+                $rows[ $index ]['recipient_email'] = __( 'Deleted User', 'memberpress-gift-reporter' );
+            }
+
+            $rows[ $index ]['gift_status_display'] = self::gift_status_label( $status );
+
+            if ( isset( $row['gifter_status'] ) ) {
+                $rows[ $index ]['gifter_status'] = ( 'deleted' === $row['gifter_status'] )
+                    ? __( 'Deleted', 'memberpress-gift-reporter' )
+                    : __( 'Active', 'memberpress-gift-reporter' );
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Translated label for a machine-readable gift status.
+     *
+     * @param string $status One of 'claimed', 'unclaimed', 'refunded'.
+     * @return string
+     */
+    public static function gift_status_label( $status ) {
+        switch ( $status ) {
+            case 'claimed':
+                return __( 'Claimed', 'memberpress-gift-reporter' );
+
+            case 'unclaimed':
+                return __( 'Unclaimed', 'memberpress-gift-reporter' );
+
+            case self::STATUS_REFUNDED:
+                return __( 'Invalid (Refunded)', 'memberpress-gift-reporter' );
+
+            default:
+                return __( 'Unknown', 'memberpress-gift-reporter' );
+        }
     }
     
     /**
@@ -1435,48 +1510,21 @@ class MPGR_Gift_Report {
                         $translated_row['gift_total'] = $this->format_currency($translated_row['gift_total']);
                     }
                     
-                    // Handle deleted coupons in CSV export
-                    if (isset($translated_row['coupon_code']) && $translated_row['coupon_code'] === 'Deleted Coupon') {
-                        $translated_row['coupon_code'] = __( 'Deleted Coupon', 'memberpress-gift-reporter' );
-                    }
-                    
-                    // Handle deleted recipients in CSV export
-                    if (isset($translated_row['recipient_email']) && $translated_row['recipient_email'] === 'Deleted User') {
-                        $translated_row['recipient_email'] = __( 'Deleted User', 'memberpress-gift-reporter' );
-                    }
-                    
-                    // Handle recipient email for unclaimed gifts
+                    // Deleted users/coupons and every status label are already
+                    // translated by localize_rows(); only the CSV-specific
+                    // placeholders are left to apply here.
                     if (isset($translated_row['gift_status']) && $translated_row['gift_status'] !== 'claimed') {
                         $translated_row['recipient_email'] = __( 'N/A', 'memberpress-gift-reporter' );
                         $translated_row['redemption_date'] = __( 'N/A', 'memberpress-gift-reporter' );
                     }
-                    
-                    if (isset($translated_row['gift_status_display'])) {
-                        switch ($translated_row['gift_status_display']) {
-                            case 'Claimed':
-                                $translated_row['gift_status_display'] = __( 'Claimed', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Unclaimed':
-                                $translated_row['gift_status_display'] = __( 'Unclaimed', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Invalid (Refunded)':
-                                $translated_row['gift_status_display'] = __( 'Invalid (Refunded)', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Unknown':
-                                $translated_row['gift_status_display'] = __( 'Unknown', 'memberpress-gift-reporter' );
-                                break;
-                        }
-                    }
-                    if (isset($translated_row['gifter_status'])) {
-                        switch ($translated_row['gifter_status']) {
-                            case 'Deleted':
-                                $translated_row['gifter_status'] = __( 'Deleted', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Active':
-                                $translated_row['gifter_status'] = __( 'Active', 'memberpress-gift-reporter' );
-                                break;
-                        }
-                    }
+
+                    // Internal flags, not CSV columns.
+                    unset(
+                        $translated_row['gifter_deleted'],
+                        $translated_row['coupon_deleted'],
+                        $translated_row['recipient_deleted']
+                    );
+
                     $safe_row = array_map( array( $this, 'csv_sanitize_cell' ), $translated_row );
                     fputcsv( $output, $safe_row, ',', '"', '\\' );
                 }
@@ -2009,37 +2057,22 @@ class MPGR_Gift_Report {
                 echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_id'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
                 echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_number'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
                 echo '<td class="mpgr-col-nowrap">' . esc_html( $row['gift_purchase_date'] ) . '</td>';
-                if ( $row['gifter_email'] === 'Deleted User' ) {
-                    echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
+                if ( ! empty( $row['gifter_deleted'] ) ) {
+                    echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html( $row['gifter_email'] ) . '</span></td>';
                 } else {
                     echo '<td class="mpgr-col-email">' . $this->admin_link( $row['gifter_email'], 'user', $row['gifter_user_id'] ) . '</td>';
                 }
                 echo '<td class="mpgr-col-product">' . $this->admin_link( $row['product_name'], 'product', $row['product_id'] ) . '</td>';
-                if ( $row['coupon_code'] === 'Deleted Coupon' ) {
-                    echo '<td class="mpgr-col-coupon"><span class="mpgr-deleted-coupon">' . esc_html__( 'Deleted Coupon', 'memberpress-gift-reporter' ) . '</span></td>';
+                if ( ! empty( $row['coupon_deleted'] ) ) {
+                    echo '<td class="mpgr-col-coupon"><span class="mpgr-deleted-coupon">' . esc_html( $row['coupon_code'] ) . '</span></td>';
                 } else {
                     echo '<td class="mpgr-col-coupon">' . $this->admin_link( $row['coupon_code'], 'coupon', (int) $row['coupon_id'] ) . '</td>';
                 }
-                // Translate status display
-                $status_display = $row['gift_status_display'];
-                switch ($status_display) {
-                    case 'Claimed':
-                        $status_display = esc_html__( 'Claimed', 'memberpress-gift-reporter' );
-                        break;
-                    case 'Unclaimed':
-                        $status_display = esc_html__( 'Unclaimed', 'memberpress-gift-reporter' );
-                        break;
-                    case 'Invalid (Refunded)':
-                        $status_display = esc_html__( 'Invalid (Refunded)', 'memberpress-gift-reporter' );
-                        break;
-                    case 'Unknown':
-                        $status_display = esc_html__( 'Unknown', 'memberpress-gift-reporter' );
-                        break;
-                }
-                echo '<td class="mpgr-col-nowrap ' . esc_attr( $status_class ) . '">' . esc_html( $status_display ) . '</td>';
+                // Already translated by localize_rows().
+                echo '<td class="mpgr-col-nowrap ' . esc_attr( $status_class ) . '">' . esc_html( $row['gift_status_display'] ) . '</td>';
                 if ( $row['gift_status'] === 'claimed' ) {
-                    if ( $row['recipient_email'] === 'Deleted User' ) {
-                        echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
+                    if ( ! empty( $row['recipient_deleted'] ) ) {
+                        echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html( $row['recipient_email'] ) . '</span></td>';
                     } else {
                         echo '<td class="mpgr-col-email">' . $this->admin_link( $row['recipient_email'], 'user', $row['recipient_user_id'] ) . '</td>';
                     }
@@ -2070,7 +2103,7 @@ class MPGR_Gift_Report {
                 echo '<button class="mpgr-action-btn mpgr-resend-email" data-gift-id="' . esc_attr($row['gift_transaction_id']) . '" title="' . esc_attr__( 'Resend gift email to gifter', 'memberpress-gift-reporter' ) . '">📧</button>';
                 // Show copy link button - include redemption link as data attribute for Safari compatibility
                 $redemption_link = '';
-                if ( ! empty( $row['coupon_code'] ) && $row['coupon_code'] !== 'Deleted Coupon' && ! empty( $row['product_id'] ) ) {
+                if ( empty( $row['coupon_deleted'] ) && ! empty( $row['coupon_code'] ) && ! empty( $row['product_id'] ) ) {
                     $redemption_link = $this->generate_redemption_url( $row['product_id'], $row['coupon_code'] );
                 }
                 echo '<button class="mpgr-action-btn mpgr-copy-link" data-gift-id="' . esc_attr($row['gift_transaction_id']) . '" data-redemption-link="' . esc_attr( $redemption_link ) . '" title="' . esc_attr__( 'Copy redemption link', 'memberpress-gift-reporter' ) . '">🔗</button>';
