@@ -2305,7 +2305,7 @@ class MPGR_Gift_Report {
         // are intentional and correct - email clients require inline styles for proper rendering
         
         		echo '<div class="mpgr-gift-report">';
-		echo '<h2>🎁 ' . esc_html__( 'MemberPress Gift Report', 'memberpress-gift-reporter' ) . '</h2>';
+		echo '<h2>' . esc_html__( 'MemberPress Gift Report', 'memberpress-gift-reporter' ) . '</h2>';
 
 		if ( class_exists( 'MPGR_Onboarding' ) ) {
 			MPGR_Onboarding::render_welcome_banner();
@@ -2317,7 +2317,7 @@ class MPGR_Gift_Report {
 
 		// Filter form
 		echo '<div class="mpgr-filters">';
-		echo '<h3>🔍 ' . esc_html__( 'Filters', 'memberpress-gift-reporter' ) . '</h3>';
+		echo '<h3>' . esc_html__( 'Filters', 'memberpress-gift-reporter' ) . '</h3>';
         
         // Show active filters
         $active_filters = array();
@@ -2488,9 +2488,9 @@ class MPGR_Gift_Report {
                       !empty($filters['redemption_to']);
         
         		if ($has_filters) {
-			echo '<h3>📊 ' . esc_html__( 'Summary (Filtered)', 'memberpress-gift-reporter' ) . '</h3>';
+			echo '<h3>' . esc_html__( 'Summary (Filtered)', 'memberpress-gift-reporter' ) . '</h3>';
 		} else {
-			echo '<h3>📊 ' . esc_html__( 'All-time Summary', 'memberpress-gift-reporter' ) . '</h3>';
+			echo '<h3>' . esc_html__( 'All-time Summary', 'memberpress-gift-reporter' ) . '</h3>';
 		}
 		echo '<div class="mpgr-summary-row">';
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Total Gifts:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['total_gifts']) . '</span>';
