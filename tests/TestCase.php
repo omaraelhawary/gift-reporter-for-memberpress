@@ -11,6 +11,69 @@
 abstract class MPGR_TestCase extends WP_UnitTestCase {
 
 	/**
+	 * Create the MemberPress stand-in tables once, as real tables.
+	 *
+	 * This deliberately runs here rather than in set_up(). WP_UnitTestCase::
+	 * start_transaction() installs a 'query' filter that rewrites anything
+	 * starting with "CREATE TABLE" into "CREATE TEMPORARY TABLE" so per-test
+	 * tables roll back, and "CREATE TABLE IF NOT EXISTS" matches that prefix.
+	 *
+	 * MySQL cannot reference a temporary table more than once in a single
+	 * query, and the report joins mepr_transaction_meta five times (coupon_meta,
+	 * gift_status, the two reminder meta joins, and the EXISTS subquery), so
+	 * temporary fixture tables make every report query fail with
+	 * "Can't reopen table: 'coupon_meta'". MariaDB allows the repeated
+	 * reference, which is why this only appears on MySQL.
+	 *
+	 * wpSetUpBeforeClass() runs before any test's transaction starts, so no
+	 * filter is active and the tables are created for real. Rows are cleared
+	 * per test in set_up() with DELETE, which is transactional -- TRUNCATE
+	 * would implicitly commit and break the rollback isolation of the test.
+	 *
+	 * @param WP_UnitTest_Factory $factory Shared fixture factory.
+	 */
+	public static function wpSetUpBeforeClass( $factory ) {
+		global $wpdb;
+
+		$charset = $wpdb->get_charset_collate();
+		$meta    = $wpdb->prefix . 'mepr_transaction_meta';
+		$txns    = $wpdb->prefix . 'mepr_transactions';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange
+		$wpdb->query(
+			"CREATE TABLE IF NOT EXISTS {$meta} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				transaction_id bigint(20) unsigned NOT NULL,
+				meta_key varchar(255) DEFAULT NULL,
+				meta_value longtext,
+				PRIMARY KEY (id),
+				KEY transaction_id (transaction_id),
+				KEY meta_key (meta_key)
+			) {$charset}"
+		);
+
+		// Only the columns the report queries touch; MemberPress ships more.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange
+		$wpdb->query(
+			"CREATE TABLE IF NOT EXISTS {$txns} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				user_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				product_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				coupon_id bigint(20) unsigned DEFAULT NULL,
+				amount decimal(14,2) NOT NULL DEFAULT 0.00,
+				total decimal(14,2) NOT NULL DEFAULT 0.00,
+				status varchar(32) NOT NULL DEFAULT 'pending',
+				trans_num varchar(255) DEFAULT NULL,
+				created_at datetime DEFAULT NULL,
+				PRIMARY KEY (id),
+				KEY user_id (user_id),
+				KEY coupon_id (coupon_id),
+				KEY status (status)
+			) {$charset}"
+		);
+	}
+
+	/**
 	 * Reset plugin options before each test.
 	 */
 	public function set_up() {
@@ -33,69 +96,24 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 			delete_user_meta( $user_id, 'mpgr_report_viewed' );
 		}
 
-		$this->ensure_memberpress_meta_table();
-		$this->ensure_memberpress_transactions_table();
+		$this->reset_memberpress_tables();
 	}
 
 	/**
-	 * Create a minimal MemberPress transaction meta table for tests.
-	 */
-	protected function ensure_memberpress_meta_table() {
-		global $wpdb;
-
-		$table   = $wpdb->prefix . 'mepr_transaction_meta';
-		$charset = $wpdb->get_charset_collate();
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange
-		$wpdb->query(
-			"CREATE TABLE IF NOT EXISTS {$table} (
-				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-				transaction_id bigint(20) unsigned NOT NULL,
-				meta_key varchar(255) DEFAULT NULL,
-				meta_value longtext,
-				PRIMARY KEY (id),
-				KEY transaction_id (transaction_id),
-				KEY meta_key (meta_key)
-			) {$charset}"
-		);
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$wpdb->query( "TRUNCATE TABLE {$table}" );
-	}
-
-	/**
-	 * Create a minimal MemberPress transactions table for tests.
+	 * Clear the MemberPress stand-in tables between tests.
 	 *
-	 * Only the columns the report queries touch are defined; MemberPress itself
-	 * ships a wider schema.
+	 * DELETE rather than TRUNCATE: TRUNCATE is DDL and would implicitly commit,
+	 * ending the transaction WP_UnitTestCase relies on to roll each test back.
+	 * The tables themselves are created in wpSetUpBeforeClass().
 	 */
-	protected function ensure_memberpress_transactions_table() {
+	protected function reset_memberpress_tables() {
 		global $wpdb;
 
-		$table   = $wpdb->prefix . 'mepr_transactions';
-		$charset = $wpdb->get_charset_collate();
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange
-		$wpdb->query(
-			"CREATE TABLE IF NOT EXISTS {$table} (
-				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-				user_id bigint(20) unsigned NOT NULL DEFAULT 0,
-				product_id bigint(20) unsigned NOT NULL DEFAULT 0,
-				coupon_id bigint(20) unsigned DEFAULT NULL,
-				amount decimal(14,2) NOT NULL DEFAULT 0.00,
-				total decimal(14,2) NOT NULL DEFAULT 0.00,
-				status varchar(32) NOT NULL DEFAULT 'pending',
-				trans_num varchar(255) DEFAULT NULL,
-				created_at datetime DEFAULT NULL,
-				PRIMARY KEY (id),
-				KEY user_id (user_id),
-				KEY coupon_id (coupon_id),
-				KEY status (status)
-			) {$charset}"
-		);
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$wpdb->query( "TRUNCATE TABLE {$table}" );
+		foreach ( array( 'mepr_transaction_meta', 'mepr_transactions' ) as $suffix ) {
+			$table = $wpdb->prefix . $suffix;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->query( "DELETE FROM {$table}" );
+		}
 	}
 
 	/**
