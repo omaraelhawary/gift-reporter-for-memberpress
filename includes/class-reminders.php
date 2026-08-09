@@ -17,6 +17,129 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class MPGR_Reminders {
 
+	/**
+	 * Transaction meta key holding the per-gift reminder send log.
+	 */
+	const LOG_META_KEY = '_mpgr_reminder_log';
+
+	/**
+	 * How many log entries to keep per gift.
+	 *
+	 * The log lives in a single meta row, so it is capped to keep that row
+	 * small; the oldest entries are dropped first. Twenty covers far more
+	 * sends than any sane schedule produces for one gift.
+	 */
+	const LOG_MAX_ENTRIES = 20;
+
+	/**
+	 * Append an attempt to a gift's reminder log.
+	 *
+	 * Every attempt is recorded, successful or not. A wp_mail() failure inside
+	 * cron was previously silent: nothing was written, so when a site owner
+	 * asked "did the reminder go out?" the plugin had no answer.
+	 *
+	 * @param int    $transaction_id Gift transaction ID.
+	 * @param string $trigger        What caused the send: 'schedule:N', 'manual' or 'bulk'.
+	 * @param bool   $sent           Whether the mail was handed off successfully.
+	 * @param string $recipient      Address the mail was addressed to.
+	 * @param string $reason         Short machine-readable cause when not sent.
+	 */
+	public static function log_reminder_attempt( $transaction_id, $trigger, $sent, $recipient = '', $reason = '' ) {
+		$transaction_id = (int) $transaction_id;
+
+		if ( $transaction_id <= 0 ) {
+			return;
+		}
+
+		$log = self::get_reminder_log( $transaction_id );
+
+		$entry = array(
+			'ts'      => time(),
+			'trigger' => (string) $trigger,
+			'result'  => $sent ? 'sent' : 'failed',
+		);
+
+		if ( '' !== $recipient ) {
+			$entry['to'] = (string) $recipient;
+		}
+
+		if ( ! $sent && '' !== $reason ) {
+			$entry['reason'] = (string) $reason;
+		}
+
+		$log[] = $entry;
+
+		if ( count( $log ) > self::LOG_MAX_ENTRIES ) {
+			$log = array_slice( $log, -self::LOG_MAX_ENTRIES );
+		}
+
+		self::upsert_transaction_meta( $transaction_id, self::LOG_META_KEY, wp_json_encode( $log ) );
+	}
+
+	/**
+	 * Reminder log for one gift, oldest first.
+	 *
+	 * @param int $transaction_id Gift transaction ID.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function get_reminder_log( $transaction_id ) {
+		$raw = self::get_reminder_meta( (int) $transaction_id, self::LOG_META_KEY, '' );
+
+		if ( empty( $raw ) ) {
+			return array();
+		}
+
+		$decoded = json_decode( $raw, true );
+
+		return is_array( $decoded ) ? $decoded : array();
+	}
+
+	/**
+	 * Count reminder attempts across all gifts since a timestamp.
+	 *
+	 * Backs the weekly summary's "reminders sent" figure with what actually
+	 * happened rather than a running per-gift counter.
+	 *
+	 * @param int  $since_ts    Unix timestamp to count from.
+	 * @param bool $failed_only Count failures instead of successful sends.
+	 * @return int
+	 */
+	public static function count_reminders_since( $since_ts, $failed_only = false ) {
+		global $wpdb;
+
+		$table = $wpdb->prefix . 'mepr_transaction_meta';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$logs = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT meta_value FROM ' . esc_sql( $table ) . ' WHERE meta_key = %s',
+				self::LOG_META_KEY
+			)
+		);
+
+		$wanted = $failed_only ? 'failed' : 'sent';
+		$count  = 0;
+
+		foreach ( $logs as $raw ) {
+			$entries = json_decode( (string) $raw, true );
+
+			if ( ! is_array( $entries ) ) {
+				continue;
+			}
+
+			foreach ( $entries as $entry ) {
+				if ( ! isset( $entry['ts'], $entry['result'] ) ) {
+					continue;
+				}
+
+				if ( (int) $entry['ts'] >= (int) $since_ts && $wanted === $entry['result'] ) {
+					++$count;
+				}
+			}
+		}
+
+		return $count;
+	}
 
 	/**
 	 * Run scheduled reminders (called by WP-Cron)
@@ -178,7 +301,15 @@ class MPGR_Reminders {
 				
 				// Send this reminder
 				$sent = self::send_reminder( $gift, $settings );
-				
+
+				self::log_reminder_attempt(
+					$gift->gift_transaction_id,
+					'schedule:' . $schedule_index,
+					$sent,
+					isset( $gift->gifter_email ) ? $gift->gifter_email : '',
+					$sent ? '' : 'mail_failed'
+				);
+
 				if ( ! $sent ) {
 					continue; // Don't update meta if email failed
 				}

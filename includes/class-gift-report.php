@@ -35,6 +35,33 @@ class MPGR_Gift_Report {
     private const STATUS_REFUNDED = 'refunded';
 
     /**
+     * How long a cached summary stays valid, in seconds.
+     *
+     * Matches the aging-arcs cache. Short enough that a stale figure is never
+     * interesting, long enough to absorb the repeated calls a single page view
+     * makes (row count, filtered summary, all-time summary).
+     */
+    private const SUMMARY_CACHE_TTL = 300;
+
+    /**
+     * Option holding the summary cache generation.
+     *
+     * Summaries are keyed by a hash of their filters, so there is no way to
+     * enumerate them for deletion. Bumping this number namespaces every key at
+     * once; the orphaned transients expire on their own within the TTL.
+     */
+    private const SUMMARY_VERSION_OPTION = 'mpgr_summary_cache_version';
+
+    /**
+     * Default and maximum rows per REST page.
+     *
+     * The ceiling keeps one request from re-running the join set over an
+     * unbounded row count; clients that want everything should page.
+     */
+    private const REST_DEFAULT_PER_PAGE = 100;
+    private const REST_MAX_PER_PAGE     = 200;
+
+    /**
      * Plugin instance.
      *
      * @var self|null
@@ -78,6 +105,10 @@ class MPGR_Gift_Report {
 
 		// Add REST API endpoint.
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
+
+		// Drop cached summaries as soon as the underlying data changes.
+		add_action( 'mpgft-gift-purchased', array( __CLASS__, 'invalidate_summary_cache' ) );
+		add_action( 'mpgft-gift-claimed', array( __CLASS__, 'invalidate_summary_cache' ) );
 	}
     
     /**
@@ -373,7 +404,17 @@ class MPGR_Gift_Report {
      */
     public function process_queued_gift_email( $gift_transaction_id ) {
         $result = $this->send_gift_email_for_transaction( (int) $gift_transaction_id, true );
-        if ( ! empty( $result['success'] ) ) {
+        $sent   = ! empty( $result['success'] );
+
+        MPGR_Reminders::log_reminder_attempt(
+            (int) $gift_transaction_id,
+            'bulk',
+            $sent,
+            isset( $result['recipient'] ) ? $result['recipient'] : '',
+            isset( $result['error'] ) ? $result['error'] : ''
+        );
+
+        if ( $sent ) {
             MPGR_Reminders::record_manual_reminder_sent( (int) $gift_transaction_id );
         }
     }
@@ -395,6 +436,14 @@ class MPGR_Gift_Report {
 		}
 
 		$result = $this->send_gift_email_for_transaction( $gift_transaction_id, false );
+
+		MPGR_Reminders::log_reminder_attempt(
+			$gift_transaction_id,
+			'manual',
+			! empty( $result['success'] ),
+			isset( $result['recipient'] ) ? $result['recipient'] : '',
+			isset( $result['error'] ) ? $result['error'] : ''
+		);
 
 		if ( ! empty( $result['success'] ) ) {
 			MPGR_Reminders::record_manual_reminder_sent( $gift_transaction_id );
@@ -616,7 +665,7 @@ class MPGR_Gift_Report {
             'methods' => 'GET',
             'callback' => array($this, 'rest_get_report'),
             'permission_callback' => array($this, 'rest_permission_check'),
-            'args' => self::get_rest_filter_args(),
+            'args' => array_merge( self::get_rest_filter_args(), self::get_rest_pagination_args() ),
         ));
         
         register_rest_route('mpgr/v1', '/export', array(
@@ -625,6 +674,46 @@ class MPGR_Gift_Report {
             'permission_callback' => array($this, 'rest_permission_check'),
             'args' => self::get_rest_filter_args(),
         ));
+    }
+
+    /**
+     * REST argument definitions for pagination params.
+     *
+     * @return array
+     */
+    public static function get_rest_pagination_args() {
+        return array(
+            'page'     => array(
+                'required'          => false,
+                'default'           => 1,
+                'sanitize_callback' => 'absint',
+            ),
+            'per_page' => array(
+                'required'          => false,
+                'default'           => self::REST_DEFAULT_PER_PAGE,
+                'sanitize_callback' => 'absint',
+            ),
+        );
+    }
+
+    /**
+     * Clamp a requested page size into the supported range.
+     *
+     * Out-of-range values are clamped rather than rejected, and the response
+     * reports the size actually used, so a client asking for 5000 gets a
+     * working answer it can page through instead of a 400.
+     *
+     * @param mixed $per_page Requested page size.
+     * @return int
+     */
+    private static function clamp_per_page( $per_page ) {
+        $per_page = (int) $per_page;
+
+        if ( $per_page < 1 ) {
+            return self::REST_DEFAULT_PER_PAGE;
+        }
+
+        return min( $per_page, self::REST_MAX_PER_PAGE );
     }
 
     /**
@@ -739,15 +828,41 @@ class MPGR_Gift_Report {
      */
     public function rest_get_report( $request ) {
         try {
-            $filters = self::sanitize_filters( $request );
-            $data    = $this->generate_report( 1000, 0, $filters, $this->get_default_sort_clause() );
-            $summary = $this->get_summary( $filters );
+            $filters  = self::sanitize_filters( $request );
+            $per_page = self::clamp_per_page( $request->get_param( 'per_page' ) );
+            $page     = max( 1, (int) $request->get_param( 'page' ) );
 
-            return array(
-                'success' => true,
-                'data'    => $data,
-                'summary' => $summary,
+            // Cached, so asking for the total costs nothing beyond the first
+            // page of a given filter set.
+            $summary     = $this->get_summary( $filters );
+            $total       = isset( $summary['total_gifts'] ) ? (int) $summary['total_gifts'] : 0;
+            $total_pages = (int) ceil( $total / $per_page );
+
+            $data = $this->generate_report(
+                $per_page,
+                ( $page - 1 ) * $per_page,
+                $filters,
+                $this->get_default_sort_clause()
             );
+
+            $response = new WP_REST_Response(
+                array(
+                    'success'     => true,
+                    'data'        => $data,
+                    'summary'     => $summary,
+                    'page'        => $page,
+                    'per_page'    => $per_page,
+                    'total'       => $total,
+                    'total_pages' => $total_pages,
+                )
+            );
+
+            // The conventional WordPress pagination headers, so generic REST
+            // clients can page without reading the body.
+            $response->header( 'X-WP-Total', (string) $total );
+            $response->header( 'X-WP-TotalPages', (string) $total_pages );
+
+            return $response;
         } catch ( Exception $e ) {
             return new WP_Error( 'report_error', 'Unable to generate report', array( 'status' => 500 ) );
         }
@@ -775,6 +890,7 @@ class MPGR_Gift_Report {
             'product'              => 'intval',
             'gifter_email'         => 'sanitize_email',
             'recipient_email'      => 'sanitize_email',
+            'coupon_code'          => 'sanitize_text_field',
             'transaction_id'       => 'sanitize_text_field',
             'claim_transaction_id' => 'sanitize_text_field',
             'redemption_from'      => 'sanitize_text_field',
@@ -907,6 +1023,14 @@ class MPGR_Gift_Report {
             $where_conditions[] = $wpdb->prepare( 'recipient.user_email LIKE %s', '%' . $wpdb->esc_like( $recipient_email ) . '%' );
         }
 
+        if ( ! empty( $filters['coupon_code'] ) ) {
+            // Partial match: support workflows usually start from a code pasted
+            // out of a customer email, which may carry stray whitespace or only
+            // be quoted in part.
+            $coupon_code        = sanitize_text_field( $filters['coupon_code'] );
+            $where_conditions[] = $wpdb->prepare( 'gift_coupon.post_title LIKE %s', '%' . $wpdb->esc_like( $coupon_code ) . '%' );
+        }
+
         if ( ! empty( $filters['transaction_id'] ) ) {
             $transaction_id     = sanitize_text_field( $filters['transaction_id'] );
             $where_conditions[] = $wpdb->prepare( 'gifter_txn.trans_num LIKE %s', '%' . $wpdb->esc_like( $transaction_id ) . '%' );
@@ -1001,6 +1125,10 @@ class MPGR_Gift_Report {
             LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS reminder_ts_meta
                 ON gifter_txn.id = reminder_ts_meta.transaction_id
                 AND reminder_ts_meta.meta_key = '_mpgr_last_reminder_ts'
+
+            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS reminder_log_meta
+                ON gifter_txn.id = reminder_log_meta.transaction_id
+                AND reminder_log_meta.meta_key = '" . MPGR_Reminders::LOG_META_KEY . "'
         ";
     }
 
@@ -1226,6 +1354,107 @@ class MPGR_Gift_Report {
     }
 
     /**
+     * Render the per-membership breakdown table.
+     *
+     * @param array $filters Active filters.
+     */
+    private function render_product_breakdown( $filters = array() ) {
+        $breakdown = $this->get_product_breakdown( $filters );
+
+        // Nothing to compare with a single membership, and nothing to show
+        // with none.
+        if ( count( $breakdown ) < 2 ) {
+            return;
+        }
+
+        echo '<div class="mpgr-breakdown">';
+        echo '<h3>' . esc_html__( 'By Membership', 'memberpress-gift-reporter' ) . '</h3>';
+        echo '<div class="mpgr-table-scroll">';
+        echo '<table class="mpgr-table mpgr-breakdown-table">';
+        echo '<thead><tr>';
+        echo '<th>' . esc_html__( 'Membership', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Gifts', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Claimed', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Unclaimed', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Claim Rate', 'memberpress-gift-reporter' ) . '</th>';
+        echo '<th>' . esc_html__( 'Revenue', 'memberpress-gift-reporter' ) . '</th>';
+        echo '</tr></thead><tbody>';
+
+        foreach ( $breakdown as $product ) {
+            echo '<tr>';
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
+            echo '<td>' . $this->admin_link( $product['product_name'], 'product', $product['product_id'] ) . '</td>';
+            echo '<td>' . esc_html( number_format_i18n( $product['total_gifts'] ) ) . '</td>';
+            echo '<td>' . esc_html( number_format_i18n( $product['claimed_gifts'] ) ) . '</td>';
+            echo '<td>' . esc_html( number_format_i18n( $product['unclaimed_gifts'] ) ) . '</td>';
+            echo '<td>' . esc_html( $product['claim_rate'] ) . '%</td>';
+            echo '<td>' . esc_html( $product['revenue_formatted'] ) . '</td>';
+            echo '</tr>';
+        }
+
+        echo '</tbody></table>';
+        echo '</div>';
+        echo '</div>';
+    }
+
+    /**
+     * Render the purchases-vs-claims trend.
+     *
+     * Drawn with plain markup rather than a charting library: it is a small
+     * series, and the admin page should not pull in a dependency to show it.
+     *
+     * @param array $filters Active filters.
+     */
+    private function render_trend( $filters = array() ) {
+        $trend = $this->get_trend( $filters );
+
+        // A single day is not a trend.
+        if ( count( $trend ) < 2 ) {
+            return;
+        }
+
+        $peak = 1;
+        foreach ( $trend as $point ) {
+            $peak = max( $peak, $point['purchases'], $point['claims'] );
+        }
+
+        echo '<div class="mpgr-trend">';
+        echo '<h3>' . esc_html__( 'Purchases vs Claims', 'memberpress-gift-reporter' ) . '</h3>';
+        echo '<div class="mpgr-trend-legend">';
+        echo '<span class="mpgr-trend-key mpgr-trend-key--purchases">' . esc_html__( 'Purchases', 'memberpress-gift-reporter' ) . '</span>';
+        echo '<span class="mpgr-trend-key mpgr-trend-key--claims">' . esc_html__( 'Claims', 'memberpress-gift-reporter' ) . '</span>';
+        echo '</div>';
+        echo '<div class="mpgr-trend-chart">';
+
+        foreach ( $trend as $point ) {
+            $label = sprintf(
+                /* translators: 1: date, 2: number of purchases, 3: number of claims */
+                __( '%1$s — %2$d purchased, %3$d claimed', 'memberpress-gift-reporter' ),
+                $point['date'],
+                $point['purchases'],
+                $point['claims']
+            );
+
+            echo '<div class="mpgr-trend-day" title="' . esc_attr( $label ) . '">';
+            echo '<div class="mpgr-trend-bars">';
+            printf(
+                '<span class="mpgr-trend-bar mpgr-trend-bar--purchases" style="height:%d%%"></span>',
+                (int) round( ( $point['purchases'] / $peak ) * 100 )
+            );
+            printf(
+                '<span class="mpgr-trend-bar mpgr-trend-bar--claims" style="height:%d%%"></span>',
+                (int) round( ( $point['claims'] / $peak ) * 100 )
+            );
+            echo '</div>';
+            echo '<span class="screen-reader-text">' . esc_html( $label ) . '</span>';
+            echo '</div>';
+        }
+
+        echo '</div>';
+        echo '</div>';
+    }
+
+    /**
      * Count rows matching filters (uses summary aggregation).
      *
      * @param array $filters Active filters.
@@ -1265,7 +1494,7 @@ class MPGR_Gift_Report {
             
             gifter.ID AS gifter_user_id,
             gifter.user_login AS gifter_username,
-            COALESCE(gifter.user_email, 'Deleted User') AS gifter_email,
+            gifter.user_email AS gifter_email,
             COALESCE(gifter_fname.meta_value, '') AS gifter_first_name,
             COALESCE(gifter_lname.meta_value, '') AS gifter_last_name,
             
@@ -1273,7 +1502,7 @@ class MPGR_Gift_Report {
             gift_product.post_title AS product_name,
             
             coupon_meta.meta_value AS coupon_id,
-            COALESCE(gift_coupon.post_title, 'Deleted Coupon') AS coupon_code,
+            gift_coupon.post_title AS coupon_code,
             
             CASE
                 WHEN " . self::SQL_IS_REFUNDED . " THEN '" . self::STATUS_REFUNDED . "'
@@ -1286,24 +1515,18 @@ class MPGR_Gift_Report {
             
             recipient.ID AS recipient_user_id,
             recipient.user_login AS recipient_username,
-            COALESCE(recipient.user_email, 'Deleted User') AS recipient_email,
+            recipient.user_email AS recipient_email,
             recipient_fname.meta_value AS recipient_first_name,
             recipient_lname.meta_value AS recipient_last_name,
             
             CASE
-                WHEN " . self::SQL_IS_REFUNDED . " THEN 'Invalid (Refunded)'
-                WHEN gift_status.meta_value = 'claimed' THEN 'Claimed'
-                WHEN gift_status.meta_value = 'unclaimed' THEN 'Unclaimed'
-                ELSE 'Unknown'
-            END AS gift_status_display,
-            
-            CASE 
-                WHEN gifter.ID IS NULL THEN 'Deleted'
-                ELSE 'Active'
+                WHEN gifter.ID IS NULL THEN 'deleted'
+                ELSE 'active'
             END AS gifter_status,
 
             COALESCE(reminder_count_meta.meta_value, 0) AS reminders_sent,
-            reminder_ts_meta.meta_value AS last_reminder_ts
+            reminder_ts_meta.meta_value AS last_reminder_ts,
+            reminder_log_meta.meta_value AS reminder_log_raw
 
         FROM 
             {$wpdb->prefix}mepr_transactions AS gifter_txn
@@ -1314,9 +1537,284 @@ class MPGR_Gift_Report {
         ";
         
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dynamic query with properly prepared WHERE conditions and LIMIT clause. All user inputs are sanitized and prepared via $wpdb->prepare() before being added to $where_conditions array and $limit_clause. This is a false positive - the query is safe because all dynamic values are properly escaped.
-        $this->report_data = $wpdb->get_results($query, ARRAY_A);
-        
+        $this->report_data = $this->localize_rows( $wpdb->get_results($query, ARRAY_A) );
+
         return $this->report_data;
+    }
+
+    /**
+     * Attach translated labels to raw query rows.
+     *
+     * The query used to bake 'Deleted User', 'Deleted Coupon' and the status
+     * labels in as SQL literals, so the admin table rendered them in English
+     * whatever the site locale -- the CSV export translated them on the way
+     * out, the table did not. The query now returns NULL for a missing user or
+     * coupon and a machine-readable status, and the labels are applied here, in
+     * one place, on every path (table, CSV, REST).
+     *
+     * The *_deleted flags let callers style a missing record without comparing
+     * against a translated string.
+     *
+     * @param array $rows Raw report rows.
+     * @return array Rows with display values filled in.
+     */
+    private function localize_rows( $rows ) {
+        if ( empty( $rows ) || ! is_array( $rows ) ) {
+            return array();
+        }
+
+        $intended = $this->get_intended_recipients( wp_list_pluck( $rows, 'gift_transaction_id' ) );
+
+        foreach ( $rows as $index => $row ) {
+            $status = isset( $row['gift_status'] ) ? $row['gift_status'] : '';
+
+            $gifter_missing = ! isset( $row['gifter_email'] ) || '' === $row['gifter_email'];
+            $coupon_missing = ! isset( $row['coupon_code'] ) || '' === $row['coupon_code'];
+
+            // A recipient only exists once a gift is claimed; an empty one on an
+            // unclaimed row is normal, not a deleted user.
+            $recipient_missing = ( 'claimed' === $status )
+                && ( ! isset( $row['recipient_email'] ) || '' === $row['recipient_email'] );
+
+            $rows[ $index ]['gifter_deleted']    = $gifter_missing;
+            $rows[ $index ]['coupon_deleted']    = $coupon_missing;
+            $rows[ $index ]['recipient_deleted'] = $recipient_missing;
+
+            if ( $gifter_missing ) {
+                $rows[ $index ]['gifter_email'] = __( 'Deleted User', 'memberpress-gift-reporter' );
+            }
+
+            if ( $coupon_missing ) {
+                $rows[ $index ]['coupon_code'] = __( 'Deleted Coupon', 'memberpress-gift-reporter' );
+            }
+
+            if ( $recipient_missing ) {
+                $rows[ $index ]['recipient_email'] = __( 'Deleted User', 'memberpress-gift-reporter' );
+            }
+
+            $rows[ $index ]['gift_status_display'] = self::gift_status_label( $status );
+
+            if ( isset( $row['gifter_status'] ) ) {
+                $rows[ $index ]['gifter_status'] = ( 'deleted' === $row['gifter_status'] )
+                    ? __( 'Deleted', 'memberpress-gift-reporter' )
+                    : __( 'Active', 'memberpress-gift-reporter' );
+            }
+
+            // Decode the reminder trail once here so the table, CSV and REST
+            // all see structured entries rather than a JSON blob.
+            $log = array();
+            if ( ! empty( $row['reminder_log_raw'] ) ) {
+                $decoded = json_decode( (string) $row['reminder_log_raw'], true );
+                $log     = is_array( $decoded ) ? $decoded : array();
+            }
+
+            $failures = 0;
+            foreach ( $log as $entry ) {
+                if ( isset( $entry['result'] ) && 'failed' === $entry['result'] ) {
+                    ++$failures;
+                }
+            }
+
+            unset( $rows[ $index ]['reminder_log_raw'] );
+
+            // Who the gifter said the gift was for. Distinct from
+            // recipient_email, which only exists once someone has claimed it.
+            $transaction_id = isset( $row['gift_transaction_id'] ) ? (int) $row['gift_transaction_id'] : 0;
+            $for            = isset( $intended[ $transaction_id ] )
+                ? $intended[ $transaction_id ]
+                : array( 'name' => '', 'email' => '' );
+
+            /**
+             * Filters the intended recipient for one gift.
+             *
+             * @param array $for            Name and email; either may be empty.
+             * @param int   $transaction_id Gift transaction ID.
+             */
+            $for = apply_filters( 'mpgr_intended_recipient', $for, $transaction_id );
+
+            $rows[ $index ]['intended_recipient_name']  = isset( $for['name'] ) ? (string) $for['name'] : '';
+            $rows[ $index ]['intended_recipient_email'] = isset( $for['email'] ) ? (string) $for['email'] : '';
+
+            $rows[ $index ]['reminder_log']       = $log;
+            $rows[ $index ]['reminder_failures']  = $failures;
+            $rows[ $index ]['reminder_last_failed'] = ! empty( $log )
+                && isset( $log[ count( $log ) - 1 ]['result'] )
+                && 'failed' === $log[ count( $log ) - 1 ]['result'];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * One-line summary of a gift's reminder history, for a tooltip.
+     *
+     * @param array $log Decoded reminder log entries.
+     * @return string
+     */
+    private function format_reminder_log( $log ) {
+        if ( empty( $log ) ) {
+            return __( 'No reminders sent yet.', 'memberpress-gift-reporter' );
+        }
+
+        $lines = array();
+
+        // Most recent first: that is what someone chasing a support question wants.
+        foreach ( array_reverse( $log ) as $entry ) {
+            $when = isset( $entry['ts'] )
+                ? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $entry['ts'] )
+                : '';
+
+            $trigger = isset( $entry['trigger'] ) ? $entry['trigger'] : '';
+            if ( 0 === strpos( $trigger, 'schedule:' ) ) {
+                /* translators: %d: reminder schedule number, starting at 1 */
+                $trigger = sprintf( __( 'automatic #%d', 'memberpress-gift-reporter' ), (int) substr( $trigger, 9 ) + 1 );
+            } elseif ( 'manual' === $trigger ) {
+                $trigger = __( 'manual', 'memberpress-gift-reporter' );
+            } elseif ( 'bulk' === $trigger ) {
+                $trigger = __( 'bulk', 'memberpress-gift-reporter' );
+            }
+
+            if ( isset( $entry['result'] ) && 'failed' === $entry['result'] ) {
+                $outcome = isset( $entry['reason'] ) && '' !== $entry['reason']
+                    /* translators: %s: machine-readable failure reason */
+                    ? sprintf( __( 'FAILED (%s)', 'memberpress-gift-reporter' ), $entry['reason'] )
+                    : __( 'FAILED', 'memberpress-gift-reporter' );
+            } else {
+                $outcome = __( 'sent', 'memberpress-gift-reporter' );
+            }
+
+            $lines[] = sprintf( '%s — %s — %s', $when, $trigger, $outcome );
+        }
+
+        return implode( "\n", $lines );
+    }
+
+    /**
+     * Transaction meta keys holding the intended recipient.
+     *
+     * The Gifting add-on's post-purchase popup collects To (Name) and
+     * To (Email), but the meta keys it writes them under are not documented
+     * publicly and the add-on is commercial, so this ships with no defaults
+     * rather than a guess that would silently read nothing -- or, worse, read
+     * the wrong field.
+     *
+     * Register the keys to switch the feature on, most-preferred first:
+     *
+     *     add_filter( 'mpgr_intended_recipient_meta_keys', function ( $keys ) {
+     *         $keys['email'][] = '_mepr_gift_recipient_email';
+     *         $keys['name'][]  = '_mepr_gift_recipient_name';
+     *         return $keys;
+     *     } );
+     *
+     * @return array{name: string[], email: string[]}
+     */
+    public static function get_intended_recipient_meta_keys() {
+        $keys = apply_filters(
+            'mpgr_intended_recipient_meta_keys',
+            array(
+                'name'  => array(),
+                'email' => array(),
+            )
+        );
+
+        return array(
+            'name'  => isset( $keys['name'] ) && is_array( $keys['name'] ) ? array_values( $keys['name'] ) : array(),
+            'email' => isset( $keys['email'] ) && is_array( $keys['email'] ) ? array_values( $keys['email'] ) : array(),
+        );
+    }
+
+    /**
+     * Look up the intended recipients for a set of gift transactions.
+     *
+     * Done in one query for the whole page rather than per row; returns an
+     * empty map when no keys are registered, which is the default.
+     *
+     * @param int[] $transaction_ids Gift transaction IDs.
+     * @return array<int, array{name: string, email: string}>
+     */
+    private function get_intended_recipients( array $transaction_ids ) {
+        global $wpdb;
+
+        $keys            = self::get_intended_recipient_meta_keys();
+        $all_keys        = array_merge( $keys['name'], $keys['email'] );
+        $transaction_ids = array_values( array_filter( array_map( 'intval', $transaction_ids ) ) );
+
+        if ( empty( $all_keys ) || empty( $transaction_ids ) ) {
+            return array();
+        }
+
+        $id_placeholders  = implode( ', ', array_fill( 0, count( $transaction_ids ), '%d' ) );
+        $key_placeholders = implode( ', ', array_fill( 0, count( $all_keys ), '%s' ) );
+
+        // The only interpolated parts are the placeholder lists, built from
+        // array counts rather than from any input; every value itself goes
+        // through prepare() below.
+        // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $sql = "SELECT transaction_id, meta_key, meta_value
+                FROM {$wpdb->prefix}mepr_transaction_meta
+                WHERE transaction_id IN ({$id_placeholders})
+                  AND meta_key IN ({$key_placeholders})";
+        // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql is the literal assembled just above; all values are passed here.
+        $prepared = $wpdb->prepare( $sql, array_merge( $transaction_ids, $all_keys ) );
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Prepared immediately above.
+        $rows = $wpdb->get_results( $prepared, ARRAY_A );
+
+        $by_transaction = array();
+        foreach ( (array) $rows as $row ) {
+            $by_transaction[ (int) $row['transaction_id'] ][ $row['meta_key'] ] = $row['meta_value'];
+        }
+
+        $recipients = array();
+        foreach ( $by_transaction as $transaction_id => $meta ) {
+            $recipients[ $transaction_id ] = array(
+                'name'  => self::first_non_empty_meta( $meta, $keys['name'] ),
+                'email' => self::first_non_empty_meta( $meta, $keys['email'] ),
+            );
+        }
+
+        return $recipients;
+    }
+
+    /**
+     * First non-empty value among a preference-ordered list of meta keys.
+     *
+     * @param array    $meta Meta values keyed by meta_key.
+     * @param string[] $keys Candidate keys, most preferred first.
+     * @return string
+     */
+    private static function first_non_empty_meta( array $meta, array $keys ) {
+        foreach ( $keys as $key ) {
+            if ( isset( $meta[ $key ] ) && '' !== trim( (string) $meta[ $key ] ) ) {
+                return (string) $meta[ $key ];
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Translated label for a machine-readable gift status.
+     *
+     * @param string $status One of 'claimed', 'unclaimed', 'refunded'.
+     * @return string
+     */
+    public static function gift_status_label( $status ) {
+        switch ( $status ) {
+            case 'claimed':
+                return __( 'Claimed', 'memberpress-gift-reporter' );
+
+            case 'unclaimed':
+                return __( 'Unclaimed', 'memberpress-gift-reporter' );
+
+            case self::STATUS_REFUNDED:
+                return __( 'Invalid (Refunded)', 'memberpress-gift-reporter' );
+
+            default:
+                return __( 'Unknown', 'memberpress-gift-reporter' );
+        }
     }
     
     /**
@@ -1426,48 +1924,30 @@ class MPGR_Gift_Report {
                         $translated_row['gift_total'] = $this->format_currency($translated_row['gift_total']);
                     }
                     
-                    // Handle deleted coupons in CSV export
-                    if (isset($translated_row['coupon_code']) && $translated_row['coupon_code'] === 'Deleted Coupon') {
-                        $translated_row['coupon_code'] = __( 'Deleted Coupon', 'memberpress-gift-reporter' );
-                    }
-                    
-                    // Handle deleted recipients in CSV export
-                    if (isset($translated_row['recipient_email']) && $translated_row['recipient_email'] === 'Deleted User') {
-                        $translated_row['recipient_email'] = __( 'Deleted User', 'memberpress-gift-reporter' );
-                    }
-                    
-                    // Handle recipient email for unclaimed gifts
+                    // Deleted users/coupons and every status label are already
+                    // translated by localize_rows(); only the CSV-specific
+                    // placeholders are left to apply here.
                     if (isset($translated_row['gift_status']) && $translated_row['gift_status'] !== 'claimed') {
                         $translated_row['recipient_email'] = __( 'N/A', 'memberpress-gift-reporter' );
                         $translated_row['redemption_date'] = __( 'N/A', 'memberpress-gift-reporter' );
                     }
-                    
-                    if (isset($translated_row['gift_status_display'])) {
-                        switch ($translated_row['gift_status_display']) {
-                            case 'Claimed':
-                                $translated_row['gift_status_display'] = __( 'Claimed', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Unclaimed':
-                                $translated_row['gift_status_display'] = __( 'Unclaimed', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Invalid (Refunded)':
-                                $translated_row['gift_status_display'] = __( 'Invalid (Refunded)', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Unknown':
-                                $translated_row['gift_status_display'] = __( 'Unknown', 'memberpress-gift-reporter' );
-                                break;
-                        }
-                    }
-                    if (isset($translated_row['gifter_status'])) {
-                        switch ($translated_row['gifter_status']) {
-                            case 'Deleted':
-                                $translated_row['gifter_status'] = __( 'Deleted', 'memberpress-gift-reporter' );
-                                break;
-                            case 'Active':
-                                $translated_row['gifter_status'] = __( 'Active', 'memberpress-gift-reporter' );
-                                break;
-                        }
-                    }
+
+                    // The log is structured; flatten it to one cell so fputcsv()
+                    // never receives an array.
+                    $translated_row['reminder_log'] = str_replace(
+                        "\n",
+                        ' | ',
+                        $this->format_reminder_log( isset( $translated_row['reminder_log'] ) ? $translated_row['reminder_log'] : array() )
+                    );
+
+                    // Internal flags, not CSV columns.
+                    unset(
+                        $translated_row['gifter_deleted'],
+                        $translated_row['coupon_deleted'],
+                        $translated_row['recipient_deleted'],
+                        $translated_row['reminder_last_failed']
+                    );
+
                     $safe_row = array_map( array( $this, 'csv_sanitize_cell' ), $translated_row );
                     fputcsv( $output, $safe_row, ',', '"', '\\' );
                 }
@@ -1492,6 +1972,15 @@ class MPGR_Gift_Report {
     public function get_summary($filters = array()) {
         global $wpdb;
 
+        $cache_key = self::summary_cache_key( $filters );
+        $cached    = get_transient( $cache_key );
+
+        // A summary is always an array with total_gifts; anything else is a
+        // value cached by an older version with a different shape.
+        if ( is_array( $cached ) && isset( $cached['total_gifts'] ) ) {
+            return $cached;
+        }
+
         $where_conditions = $this->build_where_conditions( $filters );
         $where_clause     = implode( ' AND ', $where_conditions );
 
@@ -1507,7 +1996,16 @@ class MPGR_Gift_Report {
             SUM(CASE WHEN {$is_refunded} THEN 1 ELSE 0 END) AS refunded_gifts,
             SUM(CASE WHEN {$not_refunded} THEN gifter_txn.total ELSE 0 END) AS total_revenue,
             SUM(CASE WHEN {$not_refunded} AND {$is_claimed} THEN gifter_txn.total ELSE 0 END) AS claimed_revenue,
-            SUM(CASE WHEN {$is_refunded} THEN gifter_txn.total ELSE 0 END) AS refunded_revenue
+            SUM(CASE WHEN {$is_refunded} THEN gifter_txn.total ELSE 0 END) AS refunded_revenue,
+            AVG(
+                CASE
+                    WHEN {$not_refunded}
+                     AND {$is_claimed}
+                     AND redemption_txn.created_at IS NOT NULL
+                     AND redemption_txn.created_at >= gifter_txn.created_at
+                    THEN TIMESTAMPDIFF(HOUR, gifter_txn.created_at, redemption_txn.created_at)
+                END
+            ) AS avg_hours_to_claim
         FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
         " . $this->get_report_joins_sql() . "
         WHERE {$where_clause}
@@ -1528,7 +2026,13 @@ class MPGR_Gift_Report {
         // purchase was never claimable, so counting it would understate the rate.
         $countable = max( 0, $total - $refunded );
 
-        return array(
+        // NULL when nothing in range has been claimed yet -- distinct from a
+        // genuine average of zero, so it is kept nullable rather than cast to 0.
+        $avg_hours = isset( $row['avg_hours_to_claim'] ) && null !== $row['avg_hours_to_claim']
+            ? (float) $row['avg_hours_to_claim']
+            : null;
+
+        $summary = array(
             'total_gifts'                  => $total,
             'claimed_gifts'                => $claimed,
             'unclaimed_gifts'              => $unclaimed,
@@ -1540,7 +2044,227 @@ class MPGR_Gift_Report {
             'claimed_revenue_formatted'    => $this->format_currency( $claimed_revenue ),
             'refunded_revenue'             => $refunded_revenue,
             'refunded_revenue_formatted'   => $this->format_currency( $refunded_revenue ),
+            'avg_hours_to_claim'           => $avg_hours,
+            'avg_days_to_claim'            => null === $avg_hours ? null : round( $avg_hours / 24, 1 ),
+            'avg_time_to_claim_formatted'  => self::format_duration( $avg_hours ),
         );
+
+        set_transient( $cache_key, $summary, self::SUMMARY_CACHE_TTL );
+
+        return $summary;
+    }
+
+    /**
+     * Per-membership breakdown for the filtered set.
+     *
+     * The weekly summary email already computed this; the report page had no
+     * equivalent, so the email had better analytics than the dashboard.
+     *
+     * @param array $filters Active filters.
+     * @return array<int, array<string, mixed>> Rows ordered by gift count.
+     */
+    public function get_product_breakdown( $filters = array() ) {
+        global $wpdb;
+
+        $cache_key = self::summary_cache_key( $filters, 'products' );
+        $cached    = get_transient( $cache_key );
+
+        if ( is_array( $cached ) ) {
+            return $cached;
+        }
+
+        $where_clause = implode( ' AND ', $this->build_where_conditions( $filters ) );
+
+        $is_refunded  = self::SQL_IS_REFUNDED;
+        $not_refunded = 'NOT ( ' . self::SQL_IS_REFUNDED . ' )';
+        $is_claimed   = "COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed'";
+
+        $query = "
+        SELECT
+            gift_product.ID AS product_id,
+            gift_product.post_title AS product_name,
+            COUNT(DISTINCT gifter_txn.id) AS total_gifts,
+            SUM(CASE WHEN {$not_refunded} AND {$is_claimed} THEN 1 ELSE 0 END) AS claimed_gifts,
+            SUM(CASE WHEN {$not_refunded} AND NOT ( {$is_claimed} ) THEN 1 ELSE 0 END) AS unclaimed_gifts,
+            SUM(CASE WHEN {$is_refunded} THEN 1 ELSE 0 END) AS refunded_gifts,
+            SUM(CASE WHEN {$not_refunded} THEN gifter_txn.total ELSE 0 END) AS revenue
+        FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
+        " . $this->get_report_joins_sql() . "
+        WHERE {$where_clause}
+        GROUP BY gift_product.ID, gift_product.post_title
+        ORDER BY total_gifts DESC, gift_product.post_title ASC
+        ";
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        $rows = $wpdb->get_results( $query, ARRAY_A );
+
+        $breakdown = array();
+
+        foreach ( (array) $rows as $row ) {
+            $claimed   = (int) $row['claimed_gifts'];
+            $refunded  = (int) $row['refunded_gifts'];
+            $total     = (int) $row['total_gifts'];
+            $countable = max( 0, $total - $refunded );
+            $revenue   = (float) $row['revenue'];
+
+            $breakdown[] = array(
+                'product_id'        => (int) $row['product_id'],
+                'product_name'      => (string) $row['product_name'],
+                'total_gifts'       => $total,
+                'claimed_gifts'     => $claimed,
+                'unclaimed_gifts'   => (int) $row['unclaimed_gifts'],
+                'refunded_gifts'    => $refunded,
+                // Measured against claimable gifts, matching get_summary().
+                'claim_rate'        => $countable > 0 ? round( ( $claimed / $countable ) * 100, 2 ) : 0,
+                'revenue'           => $revenue,
+                'revenue_formatted' => $this->format_currency( $revenue ),
+            );
+        }
+
+        set_transient( $cache_key, $breakdown, self::SUMMARY_CACHE_TTL );
+
+        return $breakdown;
+    }
+
+    /**
+     * Daily purchases and claims across the filtered period.
+     *
+     * Purchases are keyed by purchase date and claims by redemption date, so
+     * the two series answer "are gifts being bought?" and "are they being
+     * redeemed?" independently rather than attributing a claim to the day the
+     * gift was bought.
+     *
+     * @param array $filters Active filters.
+     * @return array<int, array{date:string,purchases:int,claims:int}> Ordered by date.
+     */
+    public function get_trend( $filters = array() ) {
+        global $wpdb;
+
+        $cache_key = self::summary_cache_key( $filters, 'trend' );
+        $cached    = get_transient( $cache_key );
+
+        if ( is_array( $cached ) ) {
+            return $cached;
+        }
+
+        $where_clause = implode( ' AND ', $this->build_where_conditions( $filters ) );
+        $joins        = $this->get_report_joins_sql();
+        $not_refunded = 'NOT ( ' . self::SQL_IS_REFUNDED . ' )';
+        $is_claimed   = "COALESCE(gift_status.meta_value, 'unclaimed') = 'claimed'";
+
+        $purchases_query = "
+        SELECT DATE(gifter_txn.created_at) AS day, COUNT(DISTINCT gifter_txn.id) AS total
+        FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
+        {$joins}
+        WHERE {$where_clause} AND {$not_refunded}
+        GROUP BY DATE(gifter_txn.created_at)
+        ";
+
+        $claims_query = "
+        SELECT DATE(redemption_txn.created_at) AS day, COUNT(DISTINCT gifter_txn.id) AS total
+        FROM {$wpdb->prefix}mepr_transactions AS gifter_txn
+        {$joins}
+        WHERE {$where_clause} AND {$not_refunded} AND {$is_claimed}
+          AND redemption_txn.created_at IS NOT NULL
+        GROUP BY DATE(redemption_txn.created_at)
+        ";
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        $purchases = $wpdb->get_results( $purchases_query, ARRAY_A );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        $claims = $wpdb->get_results( $claims_query, ARRAY_A );
+
+        $series = array();
+
+        foreach ( (array) $purchases as $row ) {
+            $series[ $row['day'] ]['purchases'] = (int) $row['total'];
+        }
+
+        foreach ( (array) $claims as $row ) {
+            $series[ $row['day'] ]['claims'] = (int) $row['total'];
+        }
+
+        ksort( $series );
+
+        $trend = array();
+        foreach ( $series as $day => $counts ) {
+            $trend[] = array(
+                'date'      => (string) $day,
+                'purchases' => isset( $counts['purchases'] ) ? $counts['purchases'] : 0,
+                'claims'    => isset( $counts['claims'] ) ? $counts['claims'] : 0,
+            );
+        }
+
+        set_transient( $cache_key, $trend, self::SUMMARY_CACHE_TTL );
+
+        return $trend;
+    }
+
+    /**
+     * Transient key for a filter set.
+     *
+     * @param array  $filters Active filters.
+     * @param string $bucket  Which cached aggregate the key is for.
+     * @return string
+     */
+    private static function summary_cache_key( $filters, $bucket = 'summary' ) {
+        $filters = is_array( $filters ) ? $filters : array();
+
+        // Sort so the same filters in a different order share one entry.
+        ksort( $filters );
+
+        return 'mpgr_summary_' . md5( $bucket . '|' . self::summary_cache_version() . '|' . wp_json_encode( $filters ) );
+    }
+
+    /**
+     * Current summary cache generation.
+     *
+     * @return int
+     */
+    private static function summary_cache_version() {
+        return (int) get_option( self::SUMMARY_VERSION_OPTION, 0 );
+    }
+
+    /**
+     * Invalidate every cached summary.
+     *
+     * Hooked to the gifting add-on's purchase and claim actions, so the report
+     * reflects a new gift immediately rather than up to the TTL later.
+     */
+    public static function invalidate_summary_cache() {
+        update_option( self::SUMMARY_VERSION_OPTION, self::summary_cache_version() + 1, false );
+    }
+
+    /**
+     * Human-readable duration for the time-to-claim stat.
+     *
+     * Sub-day averages are reported in hours: a site whose gifts are claimed
+     * within a few hours is badly served by "0.2 days", and this number exists
+     * to make reminder delays tunable.
+     *
+     * @param float|null $hours Average hours, or null when nothing is claimed.
+     * @return string Empty string when there is nothing to report.
+     */
+    public static function format_duration( $hours ) {
+        if ( null === $hours ) {
+            return '';
+        }
+
+        if ( $hours < 24 ) {
+            $rounded = max( 0, (int) round( $hours ) );
+
+            /* translators: %s: number of hours */
+            return sprintf( _n( '%s hour', '%s hours', $rounded, 'memberpress-gift-reporter' ), number_format_i18n( $rounded ) );
+        }
+
+        $days = round( $hours / 24, 1 );
+
+        // Whole numbers read better without a trailing ".0".
+        $decimals  = ( (float) (int) $days === $days ) ? 0 : 1;
+        $formatted = number_format_i18n( $days, $decimals );
+
+        /* translators: %s: number of days */
+        return sprintf( _n( '%s day', '%s days', (int) ceil( $days ), 'memberpress-gift-reporter' ), $formatted );
     }
 
     /**
@@ -1707,7 +2431,7 @@ class MPGR_Gift_Report {
         // are intentional and correct - email clients require inline styles for proper rendering
         
         		echo '<div class="mpgr-gift-report">';
-		echo '<h2>🎁 ' . esc_html__( 'MemberPress Gift Report', 'memberpress-gift-reporter' ) . '</h2>';
+		echo '<h2>' . esc_html__( 'MemberPress Gift Report', 'memberpress-gift-reporter' ) . '</h2>';
 
 		if ( class_exists( 'MPGR_Onboarding' ) ) {
 			MPGR_Onboarding::render_welcome_banner();
@@ -1719,7 +2443,7 @@ class MPGR_Gift_Report {
 
 		// Filter form
 		echo '<div class="mpgr-filters">';
-		echo '<h3>🔍 ' . esc_html__( 'Filters', 'memberpress-gift-reporter' ) . '</h3>';
+		echo '<h3>' . esc_html__( 'Filters', 'memberpress-gift-reporter' ) . '</h3>';
         
         // Show active filters
         $active_filters = array();
@@ -1749,6 +2473,9 @@ class MPGR_Gift_Report {
         }
         if (!empty($filters['recipient_email'])) {
 			$active_filters[] = esc_html__( 'Recipient Email:', 'memberpress-gift-reporter' ) . ' ' . esc_html($filters['recipient_email']);
+        }
+        if (!empty($filters['coupon_code'])) {
+			$active_filters[] = esc_html__( 'Coupon Code:', 'memberpress-gift-reporter' ) . ' ' . esc_html($filters['coupon_code']);
         }
         if (!empty($filters['transaction_id'])) {
 			$active_filters[] = esc_html__( 'Transaction ID:', 'memberpress-gift-reporter' ) . ' ' . esc_html($filters['transaction_id']);
@@ -1828,6 +2555,12 @@ class MPGR_Gift_Report {
 		echo '<input type="email" id="recipient_email" name="recipient_email" value="' . esc_attr($filters['recipient_email'] ?? '') . '" placeholder="' . esc_attr__( 'Enter recipient email', 'memberpress-gift-reporter' ) . '">';
 		echo '</div>';
         
+		// Coupon Code filter
+		echo '<div class="mpgr-filter-group">';
+		echo '<label for="coupon_code">' . esc_html__( 'Coupon Code', 'memberpress-gift-reporter' ) . '</label>';
+		echo '<input type="text" id="coupon_code" name="coupon_code" value="' . esc_attr($filters['coupon_code'] ?? '') . '" placeholder="' . esc_attr__( 'e.g. GIFT-A1B2', 'memberpress-gift-reporter' ) . '">';
+		echo '</div>';
+
 		// Transaction ID filter
 		echo '<div class="mpgr-filter-group">';
 		echo '<label for="transaction_id">' . esc_html__( 'Transaction ID', 'memberpress-gift-reporter' ) . '</label>';
@@ -1881,9 +2614,9 @@ class MPGR_Gift_Report {
                       !empty($filters['redemption_to']);
         
         		if ($has_filters) {
-			echo '<h3>📊 ' . esc_html__( 'Summary (Filtered)', 'memberpress-gift-reporter' ) . '</h3>';
+			echo '<h3>' . esc_html__( 'Summary (Filtered)', 'memberpress-gift-reporter' ) . '</h3>';
 		} else {
-			echo '<h3>📊 ' . esc_html__( 'All-time Summary', 'memberpress-gift-reporter' ) . '</h3>';
+			echo '<h3>' . esc_html__( 'All-time Summary', 'memberpress-gift-reporter' ) . '</h3>';
 		}
 		echo '<div class="mpgr-summary-row">';
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Total Gifts:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['total_gifts']) . '</span>';
@@ -1895,8 +2628,15 @@ class MPGR_Gift_Report {
 			echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Refunded:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['refunded_gifts']) . '</span>';
 		}
 		echo '<span class="mpgr-summary-item"><strong>' . esc_html__( 'Claim Rate:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['claim_rate']) . '%</span>';
+		// Only meaningful once something has been claimed in the filtered range.
+		if ( ! empty( $summary['avg_time_to_claim_formatted'] ) ) {
+			echo '<span class="mpgr-summary-item" title="' . esc_attr__( 'Average time between purchase and redemption. Use it to tune your reminder delays.', 'memberpress-gift-reporter' ) . '"><strong>' . esc_html__( 'Avg. Time to Claim:', 'memberpress-gift-reporter' ) . '</strong> ' . esc_html($summary['avg_time_to_claim_formatted']) . '</span>';
+		}
 		echo '</div>';
         echo '</div>';
+
+        $this->render_product_breakdown( $filters );
+        $this->render_trend( $filters );
 
 		if ( $total_rows > 0 ) {
 			echo '<p class="mpgr-result-count">';
@@ -1991,37 +2731,22 @@ class MPGR_Gift_Report {
                 echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_id'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
                 echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_number'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
                 echo '<td class="mpgr-col-nowrap">' . esc_html( $row['gift_purchase_date'] ) . '</td>';
-                if ( $row['gifter_email'] === 'Deleted User' ) {
-                    echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
+                if ( ! empty( $row['gifter_deleted'] ) ) {
+                    echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html( $row['gifter_email'] ) . '</span></td>';
                 } else {
                     echo '<td class="mpgr-col-email">' . $this->admin_link( $row['gifter_email'], 'user', $row['gifter_user_id'] ) . '</td>';
                 }
                 echo '<td class="mpgr-col-product">' . $this->admin_link( $row['product_name'], 'product', $row['product_id'] ) . '</td>';
-                if ( $row['coupon_code'] === 'Deleted Coupon' ) {
-                    echo '<td class="mpgr-col-coupon"><span class="mpgr-deleted-coupon">' . esc_html__( 'Deleted Coupon', 'memberpress-gift-reporter' ) . '</span></td>';
+                if ( ! empty( $row['coupon_deleted'] ) ) {
+                    echo '<td class="mpgr-col-coupon"><span class="mpgr-deleted-coupon">' . esc_html( $row['coupon_code'] ) . '</span></td>';
                 } else {
                     echo '<td class="mpgr-col-coupon">' . $this->admin_link( $row['coupon_code'], 'coupon', (int) $row['coupon_id'] ) . '</td>';
                 }
-                // Translate status display
-                $status_display = $row['gift_status_display'];
-                switch ($status_display) {
-                    case 'Claimed':
-                        $status_display = esc_html__( 'Claimed', 'memberpress-gift-reporter' );
-                        break;
-                    case 'Unclaimed':
-                        $status_display = esc_html__( 'Unclaimed', 'memberpress-gift-reporter' );
-                        break;
-                    case 'Invalid (Refunded)':
-                        $status_display = esc_html__( 'Invalid (Refunded)', 'memberpress-gift-reporter' );
-                        break;
-                    case 'Unknown':
-                        $status_display = esc_html__( 'Unknown', 'memberpress-gift-reporter' );
-                        break;
-                }
-                echo '<td class="mpgr-col-nowrap ' . esc_attr( $status_class ) . '">' . esc_html( $status_display ) . '</td>';
+                // Already translated by localize_rows().
+                echo '<td class="mpgr-col-nowrap ' . esc_attr( $status_class ) . '">' . esc_html( $row['gift_status_display'] ) . '</td>';
                 if ( $row['gift_status'] === 'claimed' ) {
-                    if ( $row['recipient_email'] === 'Deleted User' ) {
-                        echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html__( 'Deleted User', 'memberpress-gift-reporter' ) . '</span></td>';
+                    if ( ! empty( $row['recipient_deleted'] ) ) {
+                        echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html( $row['recipient_email'] ) . '</span></td>';
                     } else {
                         echo '<td class="mpgr-col-email">' . $this->admin_link( $row['recipient_email'], 'user', $row['recipient_user_id'] ) . '</td>';
                     }
@@ -2029,22 +2754,47 @@ class MPGR_Gift_Report {
                     echo '<td class="mpgr-col-id">' . $this->admin_link( $claim_label, 'transaction', (int) $row['redemption_transaction_id'] ) . '</td>';
                     echo '<td class="mpgr-col-nowrap">' . esc_html( $row['redemption_date'] ? $row['redemption_date'] : __( 'N/A', 'memberpress-gift-reporter' ) ) . '</td>';
                 } else {
-                    echo '<td class="mpgr-col-email">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
+                    // Nobody has claimed it, but the gifter may have said who it
+                    // was for. Shown as intended, not confirmed: the popup is
+                    // skippable and the named person may never redeem.
+                    $intended_email = isset( $row['intended_recipient_email'] ) ? $row['intended_recipient_email'] : '';
+                    $intended_name  = isset( $row['intended_recipient_name'] ) ? $row['intended_recipient_name'] : '';
+
+                    if ( '' !== $intended_email || '' !== $intended_name ) {
+                        $label = '' !== $intended_email ? $intended_email : $intended_name;
+
+                        echo '<td class="mpgr-col-email"><span class="mpgr-intended-recipient" title="' . esc_attr__( 'Intended recipient, from the gift purchase. Not yet claimed.', 'memberpress-gift-reporter' ) . '">' . esc_html( $label ) . '</span></td>';
+                    } else {
+                        echo '<td class="mpgr-col-email">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
+                    }
+
                     echo '<td class="mpgr-col-id">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
                     echo '<td class="mpgr-col-nowrap">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
                 }
                 echo '<td class="mpgr-col-nowrap">' . esc_html( $this->format_currency( $row['gift_total'] ) ) . '</td>';
 
                 $reminders_sent = (int) $row['reminders_sent'];
-                $last_ts        = (int) $row['last_reminder_ts'];
-                $tooltip        = $last_ts
-                    ? sprintf(
-                        /* translators: %s: formatted datetime */
-                        esc_attr__( 'Last sent: %s', 'memberpress-gift-reporter' ),
-                        gmdate( 'Y-m-d H:i', $last_ts )
-                    )
-                    : '';
-                echo '<td class="mpgr-col-nowrap"' . ( $tooltip ? ' title="' . esc_attr( $tooltip ) . '"' : '' ) . '>' . esc_html( $reminders_sent ) . '</td>';
+                $log            = isset( $row['reminder_log'] ) ? $row['reminder_log'] : array();
+                $failures       = isset( $row['reminder_failures'] ) ? (int) $row['reminder_failures'] : 0;
+
+                // The full trail answers "did the reminder actually go out?"
+                // without leaving the report.
+                $tooltip = $this->format_reminder_log( $log );
+
+                $cell = esc_html( $reminders_sent );
+
+                if ( $failures > 0 ) {
+                    $cell .= ' <span class="mpgr-reminder-failed" aria-label="' . esc_attr(
+                        sprintf(
+                            /* translators: %d: number of failed reminder attempts */
+                            _n( '%d failed attempt', '%d failed attempts', $failures, 'memberpress-gift-reporter' ),
+                            $failures
+                        )
+                    ) . '">&#9888;</span>';
+                }
+
+                // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $cell is assembled from escaped parts.
+                echo '<td class="mpgr-col-nowrap" title="' . esc_attr( $tooltip ) . '">' . $cell . '</td>';
 
                 // Actions column
                 echo '<td class="mpgr-actions mpgr-col-actions">';
@@ -2052,7 +2802,7 @@ class MPGR_Gift_Report {
                 echo '<button class="mpgr-action-btn mpgr-resend-email" data-gift-id="' . esc_attr($row['gift_transaction_id']) . '" title="' . esc_attr__( 'Resend gift email to gifter', 'memberpress-gift-reporter' ) . '">📧</button>';
                 // Show copy link button - include redemption link as data attribute for Safari compatibility
                 $redemption_link = '';
-                if ( ! empty( $row['coupon_code'] ) && $row['coupon_code'] !== 'Deleted Coupon' && ! empty( $row['product_id'] ) ) {
+                if ( empty( $row['coupon_deleted'] ) && ! empty( $row['coupon_code'] ) && ! empty( $row['product_id'] ) ) {
                     $redemption_link = $this->generate_redemption_url( $row['product_id'], $row['coupon_code'] );
                 }
                 echo '<button class="mpgr-action-btn mpgr-copy-link" data-gift-id="' . esc_attr($row['gift_transaction_id']) . '" data-redemption-link="' . esc_attr( $redemption_link ) . '" title="' . esc_attr__( 'Copy redemption link', 'memberpress-gift-reporter' ) . '">🔗</button>';

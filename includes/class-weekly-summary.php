@@ -98,6 +98,12 @@ class MPGR_Weekly_Summary {
 			'claim_rate' => 66.67,
 			'total_revenue' => 1497.50,
 			'claimed_revenue' => 998.00,
+			'avg_hours_to_claim' => 62.0,
+			'reminders_sent' => 12,
+			'reminders_failed' => 1,
+			'avg_time_to_claim_formatted' => class_exists( 'MPGR_Gift_Report' )
+				? MPGR_Gift_Report::format_duration( 62.0 )
+				: '',
 			'products' => array(
 				'Premium Membership' => array(
 					'total' => 8,
@@ -304,12 +310,23 @@ class MPGR_Weekly_Summary {
 		$claimed_revenue = 0;
 		$products = array();
 		$daily_stats = array();
-		
+		$claim_hours = array();
+
 		foreach ( $gifts as $gift ) {
 			// Count claimed/unclaimed
 			if ( $gift['gift_status'] === 'claimed' ) {
 				$claimed_gifts++;
 				$claimed_revenue += floatval( $gift['gift_total'] );
+
+				// Time to claim, for gifts that actually have a redemption on record.
+				if ( ! empty( $gift['redemption_date'] ) && ! empty( $gift['gift_purchase_date'] ) ) {
+					$purchased = strtotime( $gift['gift_purchase_date'] );
+					$redeemed  = strtotime( $gift['redemption_date'] );
+
+					if ( $purchased && $redeemed && $redeemed >= $purchased ) {
+						$claim_hours[] = ( $redeemed - $purchased ) / HOUR_IN_SECONDS;
+					}
+				}
 			} else {
 				$unclaimed_gifts++;
 			}
@@ -355,7 +372,13 @@ class MPGR_Weekly_Summary {
 		
 		// Calculate claim rate
 		$claim_rate = $total_gifts > 0 ? round( ( $claimed_gifts / $total_gifts ) * 100, 2 ) : 0;
-		
+
+		// Null rather than zero when nothing was claimed this week, so the email
+		// can omit the row instead of implying gifts were claimed instantly.
+		$avg_hours_to_claim = ! empty( $claim_hours )
+			? array_sum( $claim_hours ) / count( $claim_hours )
+			: null;
+
 		return array(
 			'start_date' => $start_date,
 			'end_date' => $end_date,
@@ -365,6 +388,18 @@ class MPGR_Weekly_Summary {
 			'claim_rate' => $claim_rate,
 			'total_revenue' => $total_revenue,
 			'claimed_revenue' => $claimed_revenue,
+			'avg_hours_to_claim' => $avg_hours_to_claim,
+			// Backed by the per-gift reminder log, so this counts sends that
+			// actually happened this week rather than a running total.
+			'reminders_sent' => class_exists( 'MPGR_Reminders' )
+				? MPGR_Reminders::count_reminders_since( strtotime( $start_date ) )
+				: 0,
+			'reminders_failed' => class_exists( 'MPGR_Reminders' )
+				? MPGR_Reminders::count_reminders_since( strtotime( $start_date ), true )
+				: 0,
+			'avg_time_to_claim_formatted' => class_exists( 'MPGR_Gift_Report' )
+				? MPGR_Gift_Report::format_duration( $avg_hours_to_claim )
+				: '',
 			'products' => $products,
 			'daily_stats' => $daily_stats,
 		);
@@ -581,6 +616,31 @@ class MPGR_Weekly_Summary {
 						<td><strong><?php echo esc_html__( 'Revenue from Claimed Gifts', 'memberpress-gift-reporter' ); ?></strong></td>
 						<td><?php echo esc_html( $claimed_revenue_formatted ); ?></td>
 					</tr>
+					<?php if ( ! empty( $data['avg_time_to_claim_formatted'] ) ) : ?>
+					<tr>
+						<td><strong><?php echo esc_html__( 'Average Time to Claim', 'memberpress-gift-reporter' ); ?></strong></td>
+						<td><?php echo esc_html( $data['avg_time_to_claim_formatted'] ); ?></td>
+					</tr>
+					<?php endif; ?>
+					<?php if ( isset( $data['reminders_sent'] ) ) : ?>
+					<tr>
+						<td><strong><?php echo esc_html__( 'Reminders Sent', 'memberpress-gift-reporter' ); ?></strong></td>
+						<td>
+							<?php echo esc_html( number_format_i18n( $data['reminders_sent'] ) ); ?>
+							<?php if ( ! empty( $data['reminders_failed'] ) ) : ?>
+								<?php
+								echo esc_html(
+									sprintf(
+										/* translators: %s: number of failed reminder sends */
+										_n( '(%s failed)', '(%s failed)', $data['reminders_failed'], 'memberpress-gift-reporter' ),
+										number_format_i18n( $data['reminders_failed'] )
+									)
+								);
+								?>
+							<?php endif; ?>
+						</td>
+					</tr>
+					<?php endif; ?>
 					<tr>
 						<td><strong><?php echo esc_html__( 'Average Gift Value', 'memberpress-gift-reporter' ); ?></strong></td>
 						<td><?php echo esc_html( self::format_currency( $data['total_gifts'] > 0 ? $data['total_revenue'] / $data['total_gifts'] : 0 ) ); ?></td>

@@ -4,7 +4,7 @@ Tags: memberpress, gifting, reports, csv export, reminders
 Requires at least: 5.0
 Requires PHP: 7.4
 Tested up to: 7.0
-Stable tag: 1.8.1
+Stable tag: 1.9.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -18,12 +18,12 @@ Extends MemberPress Gifting with reporting and management: gift tracking, filter
 
 = Features =
 
-* Gift tracking with 10 filters (dates, status, product, email, transaction ID)
+* Gift tracking with 11 filters (dates, status, product, email, coupon code, transaction ID)
 * Resend gift email and copy redemption link per gift
 * Bulk select unclaimed gifts and send reminder emails
 * Automated reminder emails with customizable schedules and templates
 * Optional weekly summary emails for admins
-* Filtered CSV export and REST API access
+* Filtered CSV export and a paginated REST API
 * Admin-only; requires MemberPress + MemberPress Gifting
 
 == Installation ==
@@ -51,6 +51,22 @@ Use the **Reminders** tab for subject and body. To override the template, copy `
 Apply filters on the Gift Report tab, then click **Download CSV Report**. Only filtered rows are exported.
 
 == Changelog ==
+
+= 1.9.0 =
+* Fixed: refunded gifts are no longer counted as revenue or as unclaimed, are shown as their own status, and can be filtered
+* Fixed: refunded gifts are no longer sent reminder emails
+* Fixed: REST API now accepts Application Passwords instead of requiring a browser session
+* Fixed: uninstall removes the onboarding options, transients and user meta added in 1.8.0
+* Fixed: report table labels now honour the site locale instead of always rendering English
+* Fixed: reminder From Name is truncated at a line break rather than having it stripped
+* Added: filter the report by coupon code
+* Added: average time-to-claim on the report and in the weekly email
+* Added: per-membership breakdown and a purchases-vs-claims trend on the report
+* Added: per-gift reminder send log, including failures, surfaced in the report and weekly email
+* Added: REST report pagination (page/per_page, total, total_pages, X-WP-Total headers)
+* Added: intended recipient shown on unclaimed gifts when the gifting add-on records one
+* Performance: summary queries are cached, cutting repeated report queries on large sites
+* Internal: test suite no longer exits early and now covers the 0-delay reminder branching
 
 = 1.8.1 =
 * Remove development files from the distributed plugin package (rounds/, bin/)

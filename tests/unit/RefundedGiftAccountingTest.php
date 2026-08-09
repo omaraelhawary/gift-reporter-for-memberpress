@@ -88,20 +88,29 @@ class RefundedGiftAccountingTest extends MPGR_TestCase {
 		);
 
 		// The redemption transaction that makes the claimed gift claimed.
-		global $wpdb;
-		$wpdb->insert(
-			$wpdb->prefix . 'mepr_transactions',
+		$this->create_redemption_transaction(
+			$claimed_coupon,
 			array(
 				'user_id'    => self::factory()->user->create(),
 				'product_id' => $this->product_id,
-				'coupon_id'  => $claimed_coupon,
-				'amount'     => 100.00,
-				'total'      => 100.00,
-				'status'     => 'complete',
-				'trans_num'  => 'TEST-REDEMPTION',
 				'created_at' => '2026-01-05 10:00:00',
 			)
 		);
+	}
+
+	/**
+	 * The claimed fixture really does join to its redemption.
+	 *
+	 * Guards the fixture itself: an earlier version set coupon_id on the gift
+	 * purchase, so redemption_pick selected the gift as its own redemption and
+	 * the recipient join was silently dead in every test.
+	 */
+	public function test_claimed_gift_joins_to_its_redemption() {
+		$row = $this->rows_by_transaction_id()[ $this->gifts['claimed'] ];
+
+		$this->assertNotEmpty( $row['redemption_transaction_id'] );
+		$this->assertNotEmpty( $row['redemption_date'] );
+		$this->assertFalse( (bool) $row['recipient_deleted'] );
 	}
 
 	/**

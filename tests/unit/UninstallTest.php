@@ -29,6 +29,7 @@ class UninstallTest extends MPGR_TestCase {
 		'mpgr_legacy_cron_cleaned_v1_6_3',
 		'mpgr_activation_ts',
 		'mpgr_last_report_snapshot',
+		'mpgr_summary_cache_version',
 	);
 
 	/**
