@@ -106,10 +106,8 @@ class OnboardingTest extends MPGR_TestCase {
 		$_REQUEST['nonce'] = wp_create_nonce( 'mpgr_onboarding_nonce' );
 
 		try {
-			MPGR_Onboarding::ajax_dismiss_welcome();
-			$this->fail( 'Expected WPAjaxDieContinueException.' );
-		} catch ( WPAjaxDieContinueException $e ) {
-			unset( $e );
+			$this->run_ajax_handler( array( 'MPGR_Onboarding', 'ajax_dismiss_welcome' ) );
+
 			$this->assertSame( '1', get_user_meta( $this->admin_id, MPGR_Onboarding::META_WELCOME, true ) );
 		} finally {
 			unset( $_REQUEST['nonce'] );
@@ -336,10 +334,8 @@ class OnboardingTest extends MPGR_TestCase {
 		$_REQUEST['nonce'] = wp_create_nonce( 'mpgr_onboarding_nonce' );
 
 		try {
-			MPGR_Onboarding::ajax_enable_weekly_summary();
-			$this->fail( 'Expected WPAjaxDieContinueException.' );
-		} catch ( WPAjaxDieContinueException $e ) {
-			unset( $e );
+			$this->run_ajax_handler( array( 'MPGR_Onboarding', 'ajax_enable_weekly_summary' ) );
+
 			$this->assertNotFalse( wp_next_scheduled( 'mpgr_run_weekly_summary' ) );
 			$settings = get_option( 'mpgr_weekly_summary_settings' );
 			$this->assertTrue( $settings['enabled'] );

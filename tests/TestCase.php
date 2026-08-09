@@ -176,6 +176,56 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Run an AJAX handler that ends in wp_send_json_*() and capture its output.
+	 *
+	 * This class extends WP_UnitTestCase, which — unlike WP_Ajax_UnitTestCase —
+	 * installs no wp_die() handler. Without one, a handler ending in
+	 * wp_send_json_success() reaches the default handler and calls die(),
+	 * terminating the whole PHPUnit process with exit code 0: the run stops
+	 * mid-suite and still looks like a pass. Filtering the die handlers turns
+	 * that exit into a catchable exception.
+	 *
+	 * @param callable $callback Handler to invoke.
+	 * @return string The JSON body the handler emitted.
+	 */
+	protected function run_ajax_handler( callable $callback ) {
+		$die_handler = static function () {
+			return static function () {
+				throw new WPAjaxDieContinueException( '' );
+			};
+		};
+
+		$filters = array( 'wp_die_handler', 'wp_die_ajax_handler', 'wp_die_json_handler', 'wp_die_jsonp_handler' );
+
+		add_filter( 'wp_doing_ajax', '__return_true' );
+		foreach ( $filters as $filter ) {
+			add_filter( $filter, $die_handler, 1 );
+		}
+
+		$died    = false;
+		$response = '';
+
+		ob_start();
+		try {
+			$callback();
+		} catch ( WPAjaxDieContinueException $e ) {
+			unset( $e );
+			$died = true;
+		} finally {
+			$response = ob_get_clean();
+
+			remove_filter( 'wp_doing_ajax', '__return_true' );
+			foreach ( $filters as $filter ) {
+				remove_filter( $filter, $die_handler, 1 );
+			}
+		}
+
+		$this->assertTrue( $died, 'Expected the AJAX handler to terminate via wp_die().' );
+
+		return $response;
+	}
+
+	/**
 	 * Invoke a private or protected method on an object.
 	 *
 	 * @param object $object     Object instance.
