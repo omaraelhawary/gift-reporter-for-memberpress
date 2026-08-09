@@ -1563,6 +1563,8 @@ class MPGR_Gift_Report {
             return array();
         }
 
+        $intended = $this->get_intended_recipients( wp_list_pluck( $rows, 'gift_transaction_id' ) );
+
         foreach ( $rows as $index => $row ) {
             $status = isset( $row['gift_status'] ) ? $row['gift_status'] : '';
 
@@ -1614,6 +1616,24 @@ class MPGR_Gift_Report {
             }
 
             unset( $rows[ $index ]['reminder_log_raw'] );
+
+            // Who the gifter said the gift was for. Distinct from
+            // recipient_email, which only exists once someone has claimed it.
+            $transaction_id = isset( $row['gift_transaction_id'] ) ? (int) $row['gift_transaction_id'] : 0;
+            $for            = isset( $intended[ $transaction_id ] )
+                ? $intended[ $transaction_id ]
+                : array( 'name' => '', 'email' => '' );
+
+            /**
+             * Filters the intended recipient for one gift.
+             *
+             * @param array $for            Name and email; either may be empty.
+             * @param int   $transaction_id Gift transaction ID.
+             */
+            $for = apply_filters( 'mpgr_intended_recipient', $for, $transaction_id );
+
+            $rows[ $index ]['intended_recipient_name']  = isset( $for['name'] ) ? (string) $for['name'] : '';
+            $rows[ $index ]['intended_recipient_email'] = isset( $for['email'] ) ? (string) $for['email'] : '';
 
             $rows[ $index ]['reminder_log']       = $log;
             $rows[ $index ]['reminder_failures']  = $failures;
@@ -1667,6 +1687,108 @@ class MPGR_Gift_Report {
         }
 
         return implode( "\n", $lines );
+    }
+
+    /**
+     * Transaction meta keys holding the intended recipient.
+     *
+     * The Gifting add-on's post-purchase popup collects To (Name) and
+     * To (Email), but the meta keys it writes them under are not documented
+     * publicly and the add-on is commercial, so this ships with no defaults
+     * rather than a guess that would silently read nothing -- or, worse, read
+     * the wrong field.
+     *
+     * Register the keys to switch the feature on, most-preferred first:
+     *
+     *     add_filter( 'mpgr_intended_recipient_meta_keys', function ( $keys ) {
+     *         $keys['email'][] = '_mepr_gift_recipient_email';
+     *         $keys['name'][]  = '_mepr_gift_recipient_name';
+     *         return $keys;
+     *     } );
+     *
+     * @return array{name: string[], email: string[]}
+     */
+    public static function get_intended_recipient_meta_keys() {
+        $keys = apply_filters(
+            'mpgr_intended_recipient_meta_keys',
+            array(
+                'name'  => array(),
+                'email' => array(),
+            )
+        );
+
+        return array(
+            'name'  => isset( $keys['name'] ) && is_array( $keys['name'] ) ? array_values( $keys['name'] ) : array(),
+            'email' => isset( $keys['email'] ) && is_array( $keys['email'] ) ? array_values( $keys['email'] ) : array(),
+        );
+    }
+
+    /**
+     * Look up the intended recipients for a set of gift transactions.
+     *
+     * Done in one query for the whole page rather than per row; returns an
+     * empty map when no keys are registered, which is the default.
+     *
+     * @param int[] $transaction_ids Gift transaction IDs.
+     * @return array<int, array{name: string, email: string}>
+     */
+    private function get_intended_recipients( array $transaction_ids ) {
+        global $wpdb;
+
+        $keys            = self::get_intended_recipient_meta_keys();
+        $all_keys        = array_merge( $keys['name'], $keys['email'] );
+        $transaction_ids = array_values( array_filter( array_map( 'intval', $transaction_ids ) ) );
+
+        if ( empty( $all_keys ) || empty( $transaction_ids ) ) {
+            return array();
+        }
+
+        $id_placeholders  = implode( ', ', array_fill( 0, count( $transaction_ids ), '%d' ) );
+        $key_placeholders = implode( ', ', array_fill( 0, count( $all_keys ), '%s' ) );
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Placeholders built from counts; values passed to prepare().
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT transaction_id, meta_key, meta_value
+                 FROM {$wpdb->prefix}mepr_transaction_meta
+                 WHERE transaction_id IN ({$id_placeholders})
+                   AND meta_key IN ({$key_placeholders})",
+                array_merge( $transaction_ids, $all_keys )
+            ),
+            ARRAY_A
+        );
+
+        $by_transaction = array();
+        foreach ( (array) $rows as $row ) {
+            $by_transaction[ (int) $row['transaction_id'] ][ $row['meta_key'] ] = $row['meta_value'];
+        }
+
+        $recipients = array();
+        foreach ( $by_transaction as $transaction_id => $meta ) {
+            $recipients[ $transaction_id ] = array(
+                'name'  => self::first_non_empty_meta( $meta, $keys['name'] ),
+                'email' => self::first_non_empty_meta( $meta, $keys['email'] ),
+            );
+        }
+
+        return $recipients;
+    }
+
+    /**
+     * First non-empty value among a preference-ordered list of meta keys.
+     *
+     * @param array    $meta Meta values keyed by meta_key.
+     * @param string[] $keys Candidate keys, most preferred first.
+     * @return string
+     */
+    private static function first_non_empty_meta( array $meta, array $keys ) {
+        foreach ( $keys as $key ) {
+            if ( isset( $meta[ $key ] ) && '' !== trim( (string) $meta[ $key ] ) ) {
+                return (string) $meta[ $key ];
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -2628,7 +2750,20 @@ class MPGR_Gift_Report {
                     echo '<td class="mpgr-col-id">' . $this->admin_link( $claim_label, 'transaction', (int) $row['redemption_transaction_id'] ) . '</td>';
                     echo '<td class="mpgr-col-nowrap">' . esc_html( $row['redemption_date'] ? $row['redemption_date'] : __( 'N/A', 'memberpress-gift-reporter' ) ) . '</td>';
                 } else {
-                    echo '<td class="mpgr-col-email">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
+                    // Nobody has claimed it, but the gifter may have said who it
+                    // was for. Shown as intended, not confirmed: the popup is
+                    // skippable and the named person may never redeem.
+                    $intended_email = isset( $row['intended_recipient_email'] ) ? $row['intended_recipient_email'] : '';
+                    $intended_name  = isset( $row['intended_recipient_name'] ) ? $row['intended_recipient_name'] : '';
+
+                    if ( '' !== $intended_email || '' !== $intended_name ) {
+                        $label = '' !== $intended_email ? $intended_email : $intended_name;
+
+                        echo '<td class="mpgr-col-email"><span class="mpgr-intended-recipient" title="' . esc_attr__( 'Intended recipient, from the gift purchase. Not yet claimed.', 'memberpress-gift-reporter' ) . '">' . esc_html( $label ) . '</span></td>';
+                    } else {
+                        echo '<td class="mpgr-col-email">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
+                    }
+
                     echo '<td class="mpgr-col-id">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
                     echo '<td class="mpgr-col-nowrap">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';
                 }

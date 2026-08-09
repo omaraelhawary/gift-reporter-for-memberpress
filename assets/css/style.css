@@ -498,6 +498,13 @@
     cursor: help;
 }
 
+/* Recipient named at purchase, before anyone has claimed the gift. */
+.mpgr-intended-recipient {
+    color: #6c757d;
+    font-style: italic;
+    cursor: help;
+}
+
 /* Per-membership breakdown */
 .mpgr-breakdown,
 .mpgr-trend {
