@@ -4,6 +4,12 @@ on:
   issues:
     types: [opened]
 
+# Assigning an issue needs issues: write. Without this block the job inherits
+# the repository default, which is read-only, and the action fails with
+# "Resource not accessible by integration".
+permissions:
+  issues: write
+
 jobs:
   auto-assign:
     runs-on: ubuntu-latest

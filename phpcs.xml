@@ -17,13 +17,13 @@
         <exclude name="Generic.PHP.DisallowShortOpenTag"/>
         
         <!-- Allow alternative concatenation -->
-        <exclude name="WordPress.Strings.ConcatenationSpacing"/>
+        <exclude name="Squiz.Strings.ConcatenationSpacing"/>
         
         <!-- Allow alternative spacing around operators -->
         <exclude name="Squiz.WhiteSpace.OperatorSpacing"/>
         
         <!-- Allow alternative function call spacing -->
-        <exclude name="PSR2.Functions.FunctionCallSignature"/>
+        <exclude name="PEAR.Functions.FunctionCallSignature"/>
         
         <!-- Allow alternative array spacing -->
         <exclude name="WordPress.Arrays.ArrayDeclarationSpacing"/>
@@ -60,9 +60,5 @@
     <arg value="n"/>
 
     <!-- Use colors -->
-    <arg value="--colors"/>
-
-    <!-- Generate checkstyle report -->
-    <arg value="--report=checkstyle"/>
-    <arg value="--report-file=phpcs-report.xml"/>
+    <arg name="colors"/>
 </ruleset>

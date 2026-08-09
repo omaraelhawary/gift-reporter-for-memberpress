@@ -133,6 +133,41 @@ class RefundedGiftAccountingTest extends MPGR_TestCase {
 	}
 
 	/**
+	 * The fixture tables must be real tables, not temporary ones.
+	 *
+	 * WP_UnitTestCase rewrites "CREATE TABLE" into "CREATE TEMPORARY TABLE",
+	 * and MySQL refuses to reference a temporary table more than once in a
+	 * single query -- which every report query does, joining
+	 * mepr_transaction_meta five times. That made the whole suite fail on CI's
+	 * MySQL while passing locally on MariaDB, which permits the repeated
+	 * reference. Asserting the table is real fails the same way on both
+	 * engines, so the divergence cannot come back unnoticed.
+	 *
+	 * information_schema lists base tables only; temporary tables never appear.
+	 */
+	public function test_fixture_tables_are_real_not_temporary() {
+		global $wpdb;
+
+		foreach ( array( 'mepr_transactions', 'mepr_transaction_meta' ) as $suffix ) {
+			$table = $wpdb->prefix . $suffix;
+
+			$found = $wpdb->get_var(
+				$wpdb->prepare(
+					'SELECT table_name FROM information_schema.tables
+					 WHERE table_schema = DATABASE() AND table_name = %s',
+					$table
+				)
+			);
+
+			$this->assertSame(
+				$table,
+				$found,
+				"{$table} is not a real table; a temporary table breaks the report query on MySQL."
+			);
+		}
+	}
+
+	/**
 	 * Refunded revenue must not inflate the totals.
 	 */
 	public function test_summary_excludes_refunded_from_revenue() {

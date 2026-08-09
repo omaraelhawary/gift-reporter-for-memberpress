@@ -35,8 +35,12 @@ access_log
 *.bak
 *.backup
 
-# PHP CodeSniffer cache
+# PHP CodeSniffer cache and generated report
 .phpcs.cache
+phpcs-report.xml
+
+# PHPUnit cache
+.phpunit.result.cache
 
 # Secrets and local env (never commit SVN_PASSWORD or similar)
 .env
