@@ -775,6 +775,7 @@ class MPGR_Gift_Report {
             'product'              => 'intval',
             'gifter_email'         => 'sanitize_email',
             'recipient_email'      => 'sanitize_email',
+            'coupon_code'          => 'sanitize_text_field',
             'transaction_id'       => 'sanitize_text_field',
             'claim_transaction_id' => 'sanitize_text_field',
             'redemption_from'      => 'sanitize_text_field',
@@ -905,6 +906,14 @@ class MPGR_Gift_Report {
         if ( ! empty( $filters['recipient_email'] ) ) {
             $recipient_email    = sanitize_email( $filters['recipient_email'] );
             $where_conditions[] = $wpdb->prepare( 'recipient.user_email LIKE %s', '%' . $wpdb->esc_like( $recipient_email ) . '%' );
+        }
+
+        if ( ! empty( $filters['coupon_code'] ) ) {
+            // Partial match: support workflows usually start from a code pasted
+            // out of a customer email, which may carry stray whitespace or only
+            // be quoted in part.
+            $coupon_code        = sanitize_text_field( $filters['coupon_code'] );
+            $where_conditions[] = $wpdb->prepare( 'gift_coupon.post_title LIKE %s', '%' . $wpdb->esc_like( $coupon_code ) . '%' );
         }
 
         if ( ! empty( $filters['transaction_id'] ) ) {
@@ -1750,6 +1759,9 @@ class MPGR_Gift_Report {
         if (!empty($filters['recipient_email'])) {
 			$active_filters[] = esc_html__( 'Recipient Email:', 'memberpress-gift-reporter' ) . ' ' . esc_html($filters['recipient_email']);
         }
+        if (!empty($filters['coupon_code'])) {
+			$active_filters[] = esc_html__( 'Coupon Code:', 'memberpress-gift-reporter' ) . ' ' . esc_html($filters['coupon_code']);
+        }
         if (!empty($filters['transaction_id'])) {
 			$active_filters[] = esc_html__( 'Transaction ID:', 'memberpress-gift-reporter' ) . ' ' . esc_html($filters['transaction_id']);
         }
@@ -1828,6 +1840,12 @@ class MPGR_Gift_Report {
 		echo '<input type="email" id="recipient_email" name="recipient_email" value="' . esc_attr($filters['recipient_email'] ?? '') . '" placeholder="' . esc_attr__( 'Enter recipient email', 'memberpress-gift-reporter' ) . '">';
 		echo '</div>';
         
+		// Coupon Code filter
+		echo '<div class="mpgr-filter-group">';
+		echo '<label for="coupon_code">' . esc_html__( 'Coupon Code', 'memberpress-gift-reporter' ) . '</label>';
+		echo '<input type="text" id="coupon_code" name="coupon_code" value="' . esc_attr($filters['coupon_code'] ?? '') . '" placeholder="' . esc_attr__( 'e.g. GIFT-A1B2', 'memberpress-gift-reporter' ) . '">';
+		echo '</div>';
+
 		// Transaction ID filter
 		echo '<div class="mpgr-filter-group">';
 		echo '<label for="transaction_id">' . esc_html__( 'Transaction ID', 'memberpress-gift-reporter' ) . '</label>';
