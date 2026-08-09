@@ -404,7 +404,17 @@ class MPGR_Gift_Report {
      */
     public function process_queued_gift_email( $gift_transaction_id ) {
         $result = $this->send_gift_email_for_transaction( (int) $gift_transaction_id, true );
-        if ( ! empty( $result['success'] ) ) {
+        $sent   = ! empty( $result['success'] );
+
+        MPGR_Reminders::log_reminder_attempt(
+            (int) $gift_transaction_id,
+            'bulk',
+            $sent,
+            isset( $result['recipient'] ) ? $result['recipient'] : '',
+            isset( $result['error'] ) ? $result['error'] : ''
+        );
+
+        if ( $sent ) {
             MPGR_Reminders::record_manual_reminder_sent( (int) $gift_transaction_id );
         }
     }
@@ -426,6 +436,14 @@ class MPGR_Gift_Report {
 		}
 
 		$result = $this->send_gift_email_for_transaction( $gift_transaction_id, false );
+
+		MPGR_Reminders::log_reminder_attempt(
+			$gift_transaction_id,
+			'manual',
+			! empty( $result['success'] ),
+			isset( $result['recipient'] ) ? $result['recipient'] : '',
+			isset( $result['error'] ) ? $result['error'] : ''
+		);
 
 		if ( ! empty( $result['success'] ) ) {
 			MPGR_Reminders::record_manual_reminder_sent( $gift_transaction_id );
@@ -1107,6 +1125,10 @@ class MPGR_Gift_Report {
             LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS reminder_ts_meta
                 ON gifter_txn.id = reminder_ts_meta.transaction_id
                 AND reminder_ts_meta.meta_key = '_mpgr_last_reminder_ts'
+
+            LEFT JOIN {$wpdb->prefix}mepr_transaction_meta AS reminder_log_meta
+                ON gifter_txn.id = reminder_log_meta.transaction_id
+                AND reminder_log_meta.meta_key = '" . MPGR_Reminders::LOG_META_KEY . "'
         ";
     }
 
@@ -1402,7 +1424,8 @@ class MPGR_Gift_Report {
             END AS gifter_status,
 
             COALESCE(reminder_count_meta.meta_value, 0) AS reminders_sent,
-            reminder_ts_meta.meta_value AS last_reminder_ts
+            reminder_ts_meta.meta_value AS last_reminder_ts,
+            reminder_log_meta.meta_value AS reminder_log_raw
 
         FROM 
             {$wpdb->prefix}mepr_transactions AS gifter_txn
@@ -1473,9 +1496,76 @@ class MPGR_Gift_Report {
                     ? __( 'Deleted', 'memberpress-gift-reporter' )
                     : __( 'Active', 'memberpress-gift-reporter' );
             }
+
+            // Decode the reminder trail once here so the table, CSV and REST
+            // all see structured entries rather than a JSON blob.
+            $log = array();
+            if ( ! empty( $row['reminder_log_raw'] ) ) {
+                $decoded = json_decode( (string) $row['reminder_log_raw'], true );
+                $log     = is_array( $decoded ) ? $decoded : array();
+            }
+
+            $failures = 0;
+            foreach ( $log as $entry ) {
+                if ( isset( $entry['result'] ) && 'failed' === $entry['result'] ) {
+                    ++$failures;
+                }
+            }
+
+            unset( $rows[ $index ]['reminder_log_raw'] );
+
+            $rows[ $index ]['reminder_log']       = $log;
+            $rows[ $index ]['reminder_failures']  = $failures;
+            $rows[ $index ]['reminder_last_failed'] = ! empty( $log )
+                && isset( $log[ count( $log ) - 1 ]['result'] )
+                && 'failed' === $log[ count( $log ) - 1 ]['result'];
         }
 
         return $rows;
+    }
+
+    /**
+     * One-line summary of a gift's reminder history, for a tooltip.
+     *
+     * @param array $log Decoded reminder log entries.
+     * @return string
+     */
+    private function format_reminder_log( $log ) {
+        if ( empty( $log ) ) {
+            return __( 'No reminders sent yet.', 'memberpress-gift-reporter' );
+        }
+
+        $lines = array();
+
+        // Most recent first: that is what someone chasing a support question wants.
+        foreach ( array_reverse( $log ) as $entry ) {
+            $when = isset( $entry['ts'] )
+                ? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $entry['ts'] )
+                : '';
+
+            $trigger = isset( $entry['trigger'] ) ? $entry['trigger'] : '';
+            if ( 0 === strpos( $trigger, 'schedule:' ) ) {
+                /* translators: %d: reminder schedule number, starting at 1 */
+                $trigger = sprintf( __( 'automatic #%d', 'memberpress-gift-reporter' ), (int) substr( $trigger, 9 ) + 1 );
+            } elseif ( 'manual' === $trigger ) {
+                $trigger = __( 'manual', 'memberpress-gift-reporter' );
+            } elseif ( 'bulk' === $trigger ) {
+                $trigger = __( 'bulk', 'memberpress-gift-reporter' );
+            }
+
+            if ( isset( $entry['result'] ) && 'failed' === $entry['result'] ) {
+                $outcome = isset( $entry['reason'] ) && '' !== $entry['reason']
+                    /* translators: %s: machine-readable failure reason */
+                    ? sprintf( __( 'FAILED (%s)', 'memberpress-gift-reporter' ), $entry['reason'] )
+                    : __( 'FAILED', 'memberpress-gift-reporter' );
+            } else {
+                $outcome = __( 'sent', 'memberpress-gift-reporter' );
+            }
+
+            $lines[] = sprintf( '%s — %s — %s', $when, $trigger, $outcome );
+        }
+
+        return implode( "\n", $lines );
     }
 
     /**
@@ -1615,11 +1705,20 @@ class MPGR_Gift_Report {
                         $translated_row['redemption_date'] = __( 'N/A', 'memberpress-gift-reporter' );
                     }
 
+                    // The log is structured; flatten it to one cell so fputcsv()
+                    // never receives an array.
+                    $translated_row['reminder_log'] = str_replace(
+                        "\n",
+                        ' | ',
+                        $this->format_reminder_log( isset( $translated_row['reminder_log'] ) ? $translated_row['reminder_log'] : array() )
+                    );
+
                     // Internal flags, not CSV columns.
                     unset(
                         $translated_row['gifter_deleted'],
                         $translated_row['coupon_deleted'],
-                        $translated_row['recipient_deleted']
+                        $translated_row['recipient_deleted'],
+                        $translated_row['reminder_last_failed']
                     );
 
                     $safe_row = array_map( array( $this, 'csv_sanitize_cell' ), $translated_row );
@@ -2285,15 +2384,27 @@ class MPGR_Gift_Report {
                 echo '<td class="mpgr-col-nowrap">' . esc_html( $this->format_currency( $row['gift_total'] ) ) . '</td>';
 
                 $reminders_sent = (int) $row['reminders_sent'];
-                $last_ts        = (int) $row['last_reminder_ts'];
-                $tooltip        = $last_ts
-                    ? sprintf(
-                        /* translators: %s: formatted datetime */
-                        esc_attr__( 'Last sent: %s', 'memberpress-gift-reporter' ),
-                        gmdate( 'Y-m-d H:i', $last_ts )
-                    )
-                    : '';
-                echo '<td class="mpgr-col-nowrap"' . ( $tooltip ? ' title="' . esc_attr( $tooltip ) . '"' : '' ) . '>' . esc_html( $reminders_sent ) . '</td>';
+                $log            = isset( $row['reminder_log'] ) ? $row['reminder_log'] : array();
+                $failures       = isset( $row['reminder_failures'] ) ? (int) $row['reminder_failures'] : 0;
+
+                // The full trail answers "did the reminder actually go out?"
+                // without leaving the report.
+                $tooltip = $this->format_reminder_log( $log );
+
+                $cell = esc_html( $reminders_sent );
+
+                if ( $failures > 0 ) {
+                    $cell .= ' <span class="mpgr-reminder-failed" aria-label="' . esc_attr(
+                        sprintf(
+                            /* translators: %d: number of failed reminder attempts */
+                            _n( '%d failed attempt', '%d failed attempts', $failures, 'memberpress-gift-reporter' ),
+                            $failures
+                        )
+                    ) . '">&#9888;</span>';
+                }
+
+                // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $cell is assembled from escaped parts.
+                echo '<td class="mpgr-col-nowrap" title="' . esc_attr( $tooltip ) . '">' . $cell . '</td>';
 
                 // Actions column
                 echo '<td class="mpgr-actions mpgr-col-actions">';

@@ -46,7 +46,7 @@ $mepr_meta_table = $wpdb->prefix . 'mepr_transaction_meta';
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Uninstall cleanup of plugin-owned meta rows
 $wpdb->query(
 	"DELETE FROM {$mepr_meta_table}
-	 WHERE meta_key IN ('_mpgr_reminder_sent_count', '_mpgr_last_reminder_ts', '_mpgr_reminder_sent')"
+	 WHERE meta_key IN ('_mpgr_reminder_sent_count', '_mpgr_last_reminder_ts', '_mpgr_reminder_sent', '_mpgr_reminder_log')"
 );
 
 // Delete per-user onboarding meta rows. Keys are listed explicitly rather than

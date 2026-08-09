@@ -99,6 +99,8 @@ class MPGR_Weekly_Summary {
 			'total_revenue' => 1497.50,
 			'claimed_revenue' => 998.00,
 			'avg_hours_to_claim' => 62.0,
+			'reminders_sent' => 12,
+			'reminders_failed' => 1,
 			'avg_time_to_claim_formatted' => class_exists( 'MPGR_Gift_Report' )
 				? MPGR_Gift_Report::format_duration( 62.0 )
 				: '',
@@ -387,6 +389,14 @@ class MPGR_Weekly_Summary {
 			'total_revenue' => $total_revenue,
 			'claimed_revenue' => $claimed_revenue,
 			'avg_hours_to_claim' => $avg_hours_to_claim,
+			// Backed by the per-gift reminder log, so this counts sends that
+			// actually happened this week rather than a running total.
+			'reminders_sent' => class_exists( 'MPGR_Reminders' )
+				? MPGR_Reminders::count_reminders_since( strtotime( $start_date ) )
+				: 0,
+			'reminders_failed' => class_exists( 'MPGR_Reminders' )
+				? MPGR_Reminders::count_reminders_since( strtotime( $start_date ), true )
+				: 0,
 			'avg_time_to_claim_formatted' => class_exists( 'MPGR_Gift_Report' )
 				? MPGR_Gift_Report::format_duration( $avg_hours_to_claim )
 				: '',
@@ -610,6 +620,25 @@ class MPGR_Weekly_Summary {
 					<tr>
 						<td><strong><?php echo esc_html__( 'Average Time to Claim', 'memberpress-gift-reporter' ); ?></strong></td>
 						<td><?php echo esc_html( $data['avg_time_to_claim_formatted'] ); ?></td>
+					</tr>
+					<?php endif; ?>
+					<?php if ( isset( $data['reminders_sent'] ) ) : ?>
+					<tr>
+						<td><strong><?php echo esc_html__( 'Reminders Sent', 'memberpress-gift-reporter' ); ?></strong></td>
+						<td>
+							<?php echo esc_html( number_format_i18n( $data['reminders_sent'] ) ); ?>
+							<?php if ( ! empty( $data['reminders_failed'] ) ) : ?>
+								<?php
+								echo esc_html(
+									sprintf(
+										/* translators: %s: number of failed reminder sends */
+										_n( '(%s failed)', '(%s failed)', $data['reminders_failed'], 'memberpress-gift-reporter' ),
+										number_format_i18n( $data['reminders_failed'] )
+									)
+								);
+								?>
+							<?php endif; ?>
+						</td>
 					</tr>
 					<?php endif; ?>
 					<tr>

@@ -490,6 +490,14 @@
     font-size: 12px;
 }
 
+/* Marks a gift whose reminder log contains a failed send. */
+.mpgr-reminder-failed {
+    color: #dc3545;
+    font-weight: bold;
+    margin-left: 4px;
+    cursor: help;
+}
+
 /* Action buttons */
 .mpgr-actions {
     white-space: nowrap;
