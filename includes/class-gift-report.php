@@ -35,6 +35,24 @@ class MPGR_Gift_Report {
     private const STATUS_REFUNDED = 'refunded';
 
     /**
+     * How long a cached summary stays valid, in seconds.
+     *
+     * Matches the aging-arcs cache. Short enough that a stale figure is never
+     * interesting, long enough to absorb the repeated calls a single page view
+     * makes (row count, filtered summary, all-time summary).
+     */
+    private const SUMMARY_CACHE_TTL = 300;
+
+    /**
+     * Option holding the summary cache generation.
+     *
+     * Summaries are keyed by a hash of their filters, so there is no way to
+     * enumerate them for deletion. Bumping this number namespaces every key at
+     * once; the orphaned transients expire on their own within the TTL.
+     */
+    private const SUMMARY_VERSION_OPTION = 'mpgr_summary_cache_version';
+
+    /**
      * Plugin instance.
      *
      * @var self|null
@@ -78,6 +96,10 @@ class MPGR_Gift_Report {
 
 		// Add REST API endpoint.
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
+
+		// Drop cached summaries as soon as the underlying data changes.
+		add_action( 'mpgft-gift-purchased', array( __CLASS__, 'invalidate_summary_cache' ) );
+		add_action( 'mpgft-gift-claimed', array( __CLASS__, 'invalidate_summary_cache' ) );
 	}
     
     /**
@@ -1549,6 +1571,15 @@ class MPGR_Gift_Report {
     public function get_summary($filters = array()) {
         global $wpdb;
 
+        $cache_key = self::summary_cache_key( $filters );
+        $cached    = get_transient( $cache_key );
+
+        // A summary is always an array with total_gifts; anything else is a
+        // value cached by an older version with a different shape.
+        if ( is_array( $cached ) && isset( $cached['total_gifts'] ) ) {
+            return $cached;
+        }
+
         $where_conditions = $this->build_where_conditions( $filters );
         $where_clause     = implode( ' AND ', $where_conditions );
 
@@ -1600,7 +1631,7 @@ class MPGR_Gift_Report {
             ? (float) $row['avg_hours_to_claim']
             : null;
 
-        return array(
+        $summary = array(
             'total_gifts'                  => $total,
             'claimed_gifts'                => $claimed,
             'unclaimed_gifts'              => $unclaimed,
@@ -1616,6 +1647,44 @@ class MPGR_Gift_Report {
             'avg_days_to_claim'            => null === $avg_hours ? null : round( $avg_hours / 24, 1 ),
             'avg_time_to_claim_formatted'  => self::format_duration( $avg_hours ),
         );
+
+        set_transient( $cache_key, $summary, self::SUMMARY_CACHE_TTL );
+
+        return $summary;
+    }
+
+    /**
+     * Transient key for a filter set.
+     *
+     * @param array $filters Active filters.
+     * @return string
+     */
+    private static function summary_cache_key( $filters ) {
+        $filters = is_array( $filters ) ? $filters : array();
+
+        // Sort so the same filters in a different order share one entry.
+        ksort( $filters );
+
+        return 'mpgr_summary_' . md5( self::summary_cache_version() . '|' . wp_json_encode( $filters ) );
+    }
+
+    /**
+     * Current summary cache generation.
+     *
+     * @return int
+     */
+    private static function summary_cache_version() {
+        return (int) get_option( self::SUMMARY_VERSION_OPTION, 0 );
+    }
+
+    /**
+     * Invalidate every cached summary.
+     *
+     * Hooked to the gifting add-on's purchase and claim actions, so the report
+     * reflects a new gift immediately rather than up to the TTL later.
+     */
+    public static function invalidate_summary_cache() {
+        update_option( self::SUMMARY_VERSION_OPTION, self::summary_cache_version() + 1, false );
     }
 
     /**

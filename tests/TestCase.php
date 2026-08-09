@@ -87,6 +87,13 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 		delete_transient( 'mpgr_pulse_stats' );
 		delete_transient( 'mpgr_aging_arcs' );
 
+		// Summaries are cached under a hash of their filters, so bump the
+		// generation instead of trying to name each key. Without this a summary
+		// computed in one test would leak into the next.
+		if ( class_exists( 'MPGR_Gift_Report' ) ) {
+			MPGR_Gift_Report::invalidate_summary_cache();
+		}
+
 		$user_id = get_current_user_id();
 		if ( $user_id ) {
 			delete_user_meta( $user_id, 'mpgr_welcome_dismissed' );

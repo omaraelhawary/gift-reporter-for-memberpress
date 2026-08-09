@@ -24,6 +24,7 @@ delete_option( 'mpgr_cron_migrated_v1_6_4' );
 delete_option( 'mpgr_legacy_cron_cleaned_v1_6_3' );
 delete_option( 'mpgr_activation_ts' );
 delete_option( 'mpgr_last_report_snapshot' );
+delete_option( 'mpgr_summary_cache_version' );
 
 // Delete cached report data (onboarding pulse and aging arcs).
 delete_transient( 'mpgr_pulse_stats' );
@@ -62,12 +63,15 @@ $wpdb->query(
 	 )"
 );
 
-// Delete per-user rate-limit transients.
+// Delete per-user rate-limit transients and the hash-keyed summary cache.
+// Those names are not enumerable, so they are matched by prefix.
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Uninstall cleanup of plugin-owned transients
 $wpdb->query(
 	"DELETE FROM {$wpdb->options}
 	 WHERE option_name LIKE '\_transient\_mpgr\_rate\_limit\_%'
-		OR option_name LIKE '\_transient\_timeout\_mpgr\_rate\_limit\_%'"
+		OR option_name LIKE '\_transient\_timeout\_mpgr\_rate\_limit\_%'
+		OR option_name LIKE '\_transient\_mpgr\_summary\_%'
+		OR option_name LIKE '\_transient\_timeout\_mpgr\_summary\_%'"
 );
 
 // Remove custom capability if it was ever granted.
