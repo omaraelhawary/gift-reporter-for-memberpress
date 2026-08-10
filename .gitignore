@@ -54,3 +54,7 @@ dist/
 svn-export/
 /memberpress-gift-reporter-svn/
 /rounds/
+
+# Superpowers working artifacts (specs, plans, subagent state)
+docs/superpowers/
+.superpowers/
