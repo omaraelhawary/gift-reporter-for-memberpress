@@ -1,7 +1,7 @@
 === Gift Reporter for MemberPress ===
 Contributors: omarelhawary
 Tags: memberpress, gifting, reports, csv export, reminders
-Requires at least: 5.0
+Requires at least: 5.3
 Requires PHP: 7.4
 Tested up to: 7.0
 Stable tag: 1.9.0
@@ -66,6 +66,8 @@ Apply filters on the Gift Report tab, then click **Download CSV Report**. Only f
 * Added: REST report pagination (page/per_page, total, total_pages, X-WP-Total headers)
 * Performance: summary queries are cached, cutting repeated report queries on large sites
 * Internal: test suite no longer exits early and now covers the 0-delay reminder branching
+* Internal: minimum WordPress version is now 5.3, which is what wp_date() and wp_timezone() have always required
+* Internal: cleared all WordPress Plugin Check findings ahead of release
 
 = 1.8.1 =
 * Remove development files from the distributed plugin package (rounds/, bin/)
