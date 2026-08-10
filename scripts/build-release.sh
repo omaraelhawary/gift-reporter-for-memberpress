@@ -50,6 +50,7 @@ rsync -a \
   --exclude='.git/' \
   --exclude='.github/' \
   --exclude='.cursor/' \
+  --exclude='.superpowers/' \
   --exclude='dist/' \
   --exclude="${SLUG}-svn/" \
   --exclude='wordpress-org-assets/' \

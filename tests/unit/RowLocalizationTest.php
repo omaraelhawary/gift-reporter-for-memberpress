@@ -147,6 +147,35 @@ class RowLocalizationTest extends MPGR_TestCase {
 	}
 
 	/**
+	 * Report rows carry no intended recipient.
+	 *
+	 * The Gifting add-on never persists its popup's To (Name) / To (Email) --
+	 * Account::send_gift_email() validates them and Utils.php reads $_POST at
+	 * send time, so nothing reaches transaction meta. Rows used to carry
+	 * intended_recipient_* keys fed by a meta lookup that could never resolve.
+	 * This pins them as gone so the dead lookup is not reintroduced.
+	 */
+	public function test_rows_carry_no_intended_recipient() {
+		$coupon_id = self::factory()->post->create(
+			array(
+				'post_title'  => 'GIFT-NOINTENT',
+				'post_type'   => 'memberpresscoupon',
+				'post_status' => 'publish',
+			)
+		);
+
+		$row = $this->row_for(
+			array(
+				'user_id'   => self::factory()->user->create(),
+				'coupon_id' => $coupon_id,
+			)
+		);
+
+		$this->assertArrayNotHasKey( 'intended_recipient_name', $row );
+		$this->assertArrayNotHasKey( 'intended_recipient_email', $row );
+	}
+
+	/**
 	 * The status label goes through translation.
 	 */
 	public function test_status_label_is_translated() {

@@ -64,7 +64,6 @@ Apply filters on the Gift Report tab, then click **Download CSV Report**. Only f
 * Added: per-membership breakdown and a purchases-vs-claims trend on the report
 * Added: per-gift reminder send log, including failures, surfaced in the report and weekly email
 * Added: REST report pagination (page/per_page, total, total_pages, X-WP-Total headers)
-* Added: intended recipient shown on unclaimed gifts when the gifting add-on records one
 * Performance: summary queries are cached, cutting repeated report queries on large sites
 * Internal: test suite no longer exits early and now covers the 0-delay reminder branching
 
