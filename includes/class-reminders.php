@@ -426,7 +426,7 @@ class MPGR_Reminders {
 		);
 
 		if ( $exists ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.SlowDBQuery -- Direct write to the MemberPress meta table; array keys are column names, not WP_Query args.
 			$wpdb->update(
 				$table,
 				array( 'meta_value' => $meta_value ),
@@ -437,10 +437,11 @@ class MPGR_Reminders {
 				array( '%s' ),
 				array( '%d', '%s' )
 			);
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.SlowDBQuery
 			return;
 		}
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.SlowDBQuery -- Direct write to the MemberPress meta table; array keys are column names, not WP_Query args.
 		$wpdb->insert(
 			$table,
 			array(
@@ -450,6 +451,7 @@ class MPGR_Reminders {
 			),
 			array( '%d', '%s', '%s' )
 		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.SlowDBQuery
 	}
 
 	/**
@@ -540,7 +542,7 @@ class MPGR_Reminders {
 		LIMIT %d
 		";
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Dynamic query with properly prepared values
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Dynamic query with properly prepared values
 		return $wpdb->get_results( $wpdb->prepare( $query, $cutoff_date, $limit ) );
 	}
 

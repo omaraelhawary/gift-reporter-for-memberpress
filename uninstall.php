@@ -42,10 +42,9 @@ wp_clear_scheduled_hook( 'mpgr_send_reminders' );
 wp_clear_scheduled_hook( 'mpgr_send_queued_gift_email' );
 
 // Delete tracking meta rows from mepr_transaction_meta.
-$mepr_meta_table = $wpdb->prefix . 'mepr_transaction_meta';
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Uninstall cleanup of plugin-owned meta rows
 $wpdb->query(
-	"DELETE FROM {$mepr_meta_table}
+	"DELETE FROM {$wpdb->prefix}mepr_transaction_meta
 	 WHERE meta_key IN ('_mpgr_reminder_sent_count', '_mpgr_last_reminder_ts', '_mpgr_reminder_sent', '_mpgr_reminder_log')"
 );
 

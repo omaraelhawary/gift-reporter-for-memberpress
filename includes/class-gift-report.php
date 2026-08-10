@@ -528,7 +528,7 @@ class MPGR_Gift_Report {
 			wp_send_json_error( array( 'message' => esc_html__( 'Access denied', 'memberpress-gift-reporter' ) ) );
 		}
 
-		$raw_ids = isset( $_POST['gift_transaction_ids'] ) ? wp_unslash( $_POST['gift_transaction_ids'] ) : array();
+		$raw_ids = isset( $_POST['gift_transaction_ids'] ) ? wp_unslash( $_POST['gift_transaction_ids'] ) : array(); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Array of IDs; every element is cast with intval() below.
 		if ( ! is_array( $raw_ids ) ) {
 			wp_send_json_error( array( 'message' => esc_html__( 'Invalid input.', 'memberpress-gift-reporter' ) ) );
 		}
@@ -1160,7 +1160,7 @@ class MPGR_Gift_Report {
 
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only sort on admin report screen.
         $orderby_key = isset( $_GET['orderby'] ) ? sanitize_key( wp_unslash( $_GET['orderby'] ) ) : 'gift_purchase_date';
-        $order       = ( isset( $_GET['order'] ) && 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_GET['order'] ) ) ) ) ? 'ASC' : 'DESC';
+        $order       = ( isset( $_GET['order'] ) && 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_GET['order'] ) ) ) ) ? 'ASC' : 'DESC'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only sort on admin report screen.
 
         $orderby_sql = isset( $allowed[ $orderby_key ] ) ? $allowed[ $orderby_key ] : $allowed['gift_purchase_date'];
 
@@ -1197,11 +1197,11 @@ class MPGR_Gift_Report {
 
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         if ( ! empty( $_GET['orderby'] ) ) {
-            $args['orderby'] = sanitize_key( wp_unslash( $_GET['orderby'] ) );
+            $args['orderby'] = sanitize_key( wp_unslash( $_GET['orderby'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only sort carried into the report URL.
         }
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         if ( ! empty( $_GET['order'] ) ) {
-            $args['order'] = sanitize_text_field( wp_unslash( $_GET['order'] ) );
+            $args['order'] = sanitize_text_field( wp_unslash( $_GET['order'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only sort carried into the report URL.
         }
 
         return add_query_arg( $args, admin_url( 'admin.php' ) );
@@ -1275,7 +1275,7 @@ class MPGR_Gift_Report {
         $class_attr = '' !== $th_class ? ' class="' . esc_attr( $th_class ) . '"' : '';
 
         if ( ! in_array( $column_key, $sortable, true ) ) {
-            echo '<th' . $class_attr . '>' . esc_html( $label ) . '</th>';
+            echo '<th' . $class_attr . '>' . esc_html( $label ) . '</th>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $class_attr built with esc_attr() above.
             return;
         }
 
@@ -1291,7 +1291,7 @@ class MPGR_Gift_Report {
         );
         $aria_sort  = $is_active ? ( 'ASC' === $current_order ? 'ascending' : 'descending' ) : 'none';
 
-        echo '<th' . $class_attr . ' aria-sort="' . esc_attr( $aria_sort ) . '"><a href="' . esc_url( $url ) . '" class="mpgr-sort-link">' . esc_html( $label ) . '</a></th>';
+        echo '<th' . $class_attr . ' aria-sort="' . esc_attr( $aria_sort ) . '"><a href="' . esc_url( $url ) . '" class="mpgr-sort-link">' . esc_html( $label ) . '</a></th>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $class_attr built with esc_attr() above.
     }
 
     /**
@@ -1885,7 +1885,7 @@ class MPGR_Gift_Report {
         WHERE {$where_clause}
         ";
 
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
         $row = $wpdb->get_row( $summary_query, ARRAY_A );
 
         $total     = isset( $row['total_gifts'] ) ? (int) $row['total_gifts'] : 0;
@@ -1969,7 +1969,7 @@ class MPGR_Gift_Report {
         ORDER BY total_gifts DESC, gift_product.post_title ASC
         ";
 
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
         $rows = $wpdb->get_results( $query, ARRAY_A );
 
         $breakdown = array();
@@ -2043,9 +2043,9 @@ class MPGR_Gift_Report {
         GROUP BY DATE(redemption_txn.created_at)
         ";
 
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
         $purchases = $wpdb->get_results( $purchases_query, ARRAY_A );
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WHERE values prepared in build_where_conditions()
         $claims = $wpdb->get_results( $claims_query, ARRAY_A );
 
         $series = array();
@@ -2517,9 +2517,9 @@ class MPGR_Gift_Report {
 			printf(
 				/* translators: 1: first row number, 2: last row number, 3: total rows */
 				esc_html__( 'Showing %1$d–%2$d of %3$d gifts', 'memberpress-gift-reporter' ),
-				min( $offset + 1, $total_rows ),
-				min( $offset + $per_page, $total_rows ),
-				$total_rows
+				(int) min( $offset + 1, $total_rows ),
+				(int) min( $offset + $per_page, $total_rows ),
+				(int) $total_rows
 			);
 			echo '</p>';
 		}
@@ -2601,20 +2601,19 @@ class MPGR_Gift_Report {
                     }
                 }
                 
-                // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
-                echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_id'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
-                echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_number'], 'transaction', $row['gift_transaction_id'] ) . '</td>';
+                echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_id'], 'transaction', $row['gift_transaction_id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
+                echo '<td class="mpgr-col-id">' . $this->admin_link( $row['gift_transaction_number'], 'transaction', $row['gift_transaction_id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
                 echo '<td class="mpgr-col-nowrap">' . esc_html( $row['gift_purchase_date'] ) . '</td>';
                 if ( ! empty( $row['gifter_deleted'] ) ) {
                     echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html( $row['gifter_email'] ) . '</span></td>';
                 } else {
-                    echo '<td class="mpgr-col-email">' . $this->admin_link( $row['gifter_email'], 'user', $row['gifter_user_id'] ) . '</td>';
+                    echo '<td class="mpgr-col-email">' . $this->admin_link( $row['gifter_email'], 'user', $row['gifter_user_id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
                 }
-                echo '<td class="mpgr-col-product">' . $this->admin_link( $row['product_name'], 'product', $row['product_id'] ) . '</td>';
+                echo '<td class="mpgr-col-product">' . $this->admin_link( $row['product_name'], 'product', $row['product_id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
                 if ( ! empty( $row['coupon_deleted'] ) ) {
                     echo '<td class="mpgr-col-coupon"><span class="mpgr-deleted-coupon">' . esc_html( $row['coupon_code'] ) . '</span></td>';
                 } else {
-                    echo '<td class="mpgr-col-coupon">' . $this->admin_link( $row['coupon_code'], 'coupon', (int) $row['coupon_id'] ) . '</td>';
+                    echo '<td class="mpgr-col-coupon">' . $this->admin_link( $row['coupon_code'], 'coupon', (int) $row['coupon_id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
                 }
                 // Already translated by localize_rows().
                 echo '<td class="mpgr-col-nowrap ' . esc_attr( $status_class ) . '">' . esc_html( $row['gift_status_display'] ) . '</td>';
@@ -2622,10 +2621,10 @@ class MPGR_Gift_Report {
                     if ( ! empty( $row['recipient_deleted'] ) ) {
                         echo '<td class="mpgr-col-email"><span class="mpgr-deleted-user">' . esc_html( $row['recipient_email'] ) . '</span></td>';
                     } else {
-                        echo '<td class="mpgr-col-email">' . $this->admin_link( $row['recipient_email'], 'user', $row['recipient_user_id'] ) . '</td>';
+                        echo '<td class="mpgr-col-email">' . $this->admin_link( $row['recipient_email'], 'user', $row['recipient_user_id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
                     }
                     $claim_label = $row['redemption_transaction_number'] ? $row['redemption_transaction_number'] : __( 'N/A', 'memberpress-gift-reporter' );
-                    echo '<td class="mpgr-col-id">' . $this->admin_link( $claim_label, 'transaction', (int) $row['redemption_transaction_id'] ) . '</td>';
+                    echo '<td class="mpgr-col-id">' . $this->admin_link( $claim_label, 'transaction', (int) $row['redemption_transaction_id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- admin_link() returns pre-escaped HTML.
                     echo '<td class="mpgr-col-nowrap">' . esc_html( $row['redemption_date'] ? $row['redemption_date'] : __( 'N/A', 'memberpress-gift-reporter' ) ) . '</td>';
                 } else {
                     echo '<td class="mpgr-col-email">' . esc_html__( 'N/A', 'memberpress-gift-reporter' ) . '</td>';

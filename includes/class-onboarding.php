@@ -600,7 +600,7 @@ class MPGR_Onboarding {
 		printf(
 			/* translators: 1: gifts claimed since last visit, 2: recovered revenue, 3: prior claim rate, 4: current claim rate */
 			esc_html__( 'Since your last visit: %1$d gifts claimed · %2$s recovered · claim rate %3$s%% → %4$s%%', 'memberpress-gift-reporter' ),
-			max( 0, $claimed_delta ),
+			(int) max( 0, $claimed_delta ),
 			esc_html( $recovered_formatted ),
 			esc_html( number_format( $prior_rate, 2 ) ),
 			esc_html( number_format( $current_rate, 2 ) )
