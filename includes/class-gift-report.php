@@ -1195,12 +1195,14 @@ class MPGR_Gift_Report {
             $extra_args
         );
 
+        // The request's sort is only a fallback: a caller asking for a specific sort (the column
+        // headers) must win, or every header would link to the sort that is already active.
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-        if ( ! empty( $_GET['orderby'] ) ) {
+        if ( ! isset( $extra_args['orderby'] ) && ! empty( $_GET['orderby'] ) ) {
             $args['orderby'] = sanitize_key( wp_unslash( $_GET['orderby'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only sort carried into the report URL.
         }
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-        if ( ! empty( $_GET['order'] ) ) {
+        if ( ! isset( $extra_args['order'] ) && ! empty( $_GET['order'] ) ) {
             $args['order'] = sanitize_text_field( wp_unslash( $_GET['order'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only sort carried into the report URL.
         }
 

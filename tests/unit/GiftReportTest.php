@@ -128,4 +128,48 @@ class GiftReportTest extends MPGR_TestCase {
 
 		$this->assertFalse( $report->rest_permission_check( $request ) );
 	}
+
+	/**
+	 * A caller-supplied sort must override the sort in the current request.
+	 */
+	public function test_report_url_prefers_caller_sort_over_request() {
+		$report          = MPGR_Gift_Report::get_instance();
+		$_GET['orderby'] = 'gift_transaction_id';
+		$_GET['order']   = 'ASC';
+
+		try {
+			$url = $report->get_report_url(
+				array(),
+				array(
+					'orderby' => 'gift_total',
+					'order'   => 'DESC',
+				)
+			);
+
+			$this->assertStringContainsString( 'orderby=gift_total', $url );
+			$this->assertStringContainsString( 'order=DESC', $url );
+			$this->assertStringNotContainsString( 'orderby=gift_transaction_id', $url );
+		} finally {
+			unset( $_GET['orderby'], $_GET['order'] );
+		}
+	}
+
+	/**
+	 * Links that carry no sort of their own keep the request's sort.
+	 */
+	public function test_report_url_keeps_request_sort_when_caller_omits_it() {
+		$report          = MPGR_Gift_Report::get_instance();
+		$_GET['orderby'] = 'gift_total';
+		$_GET['order']   = 'ASC';
+
+		try {
+			$url = $report->get_report_url( array(), array( 'paged' => 2 ) );
+
+			$this->assertStringContainsString( 'orderby=gift_total', $url );
+			$this->assertStringContainsString( 'order=ASC', $url );
+			$this->assertStringContainsString( 'paged=2', $url );
+		} finally {
+			unset( $_GET['orderby'], $_GET['order'] );
+		}
+	}
 }
