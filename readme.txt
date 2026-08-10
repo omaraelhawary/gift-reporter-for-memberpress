@@ -53,6 +53,7 @@ Apply filters on the Gift Report tab, then click **Download CSV Report**. Only f
 == Changelog ==
 
 = 1.9.0 =
+* Fixed: report table sort headers no longer all point at the sort already applied, so columns and direction can be changed again
 * Fixed: refunded gifts are no longer counted as revenue or as unclaimed, are shown as their own status, and can be filtered
 * Fixed: refunded gifts are no longer sent reminder emails
 * Fixed: REST API now accepts Application Passwords instead of requiring a browser session
