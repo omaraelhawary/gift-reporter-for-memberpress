@@ -10,12 +10,12 @@
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: memberpress-gift-reporter
  * Domain Path: /languages
- * Requires at least: 5.0
+ * Requires at least: 5.3
  * Tested up to: 7.0
  * Requires PHP: 7.4
  * 
  * @package MemberPressGiftReporter
- * @version 1.8.1
+ * @version 1.9.0
  */
 
 // Prevent direct access.
@@ -88,9 +88,6 @@ class MPGR_MemberPressGiftReporter {
 		// Register custom cron schedules
 		add_filter( 'cron_schedules', array( $this, 'add_weekly_cron_schedule' ) );
 
-		// Load translations at init — required for WordPress 6.7+ (avoid JIT load before init).
-		add_action( 'init', array( $this, 'load_textdomain' ), 0 );
-
 		// Check dependencies after plugins are loaded.
 		add_action( 'plugins_loaded', array( $this, 'check_dependencies' ) );
 	}
@@ -113,17 +110,6 @@ class MPGR_MemberPressGiftReporter {
 		return $schedules;
 	}
 
-	/**
-	 * Load plugin text domain (must run on init or later).
-	 */
-	public function load_textdomain() {
-		load_plugin_textdomain(
-			'memberpress-gift-reporter',
-			false,
-			dirname( MPGR_PLUGIN_BASENAME ) . '/languages'
-		);
-	}
-    
     /**
      * Check plugin dependencies
      */

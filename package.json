@@ -1,6 +1,6 @@
 {
   "name": "gift-reporter-for-memberpress",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "A WordPress plugin that generates comprehensive reports for the MemberPress Gifting add-on with advanced filtering, showing the linkage between gift givers and recipients.",
   "main": "index.js",
   "scripts": {
