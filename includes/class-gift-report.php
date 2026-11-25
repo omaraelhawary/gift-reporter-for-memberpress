@@ -732,7 +732,9 @@ class MPGR_Gift_Report {
         foreach ( self::get_filter_schema() as $field => $sanitize_function ) {
             $args[ $field ] = array(
                 'required'          => false,
-                'sanitize_callback' => $sanitize_function,
+                'sanitize_callback' => static function ( $value ) use ( $sanitize_function ) {
+                    return $sanitize_function( $value );
+                },
             );
         }
 

@@ -312,7 +312,9 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 	protected function invoke_private_method( $object, $methodName, array $args = array() ) {
 		$reflection = new ReflectionClass( $object );
 		$method     = $reflection->getMethod( $methodName );
-		$method->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$method->setAccessible( true );
+		}
 
 		return $method->invokeArgs( $object, $args );
 	}
@@ -328,7 +330,9 @@ abstract class MPGR_TestCase extends WP_UnitTestCase {
 	protected function invoke_private_static_method( $className, $methodName, array $args = array() ) {
 		$reflection = new ReflectionClass( $className );
 		$method     = $reflection->getMethod( $methodName );
-		$method->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$method->setAccessible( true );
+		}
 
 		return $method->invokeArgs( null, $args );
 	}

@@ -44,7 +44,9 @@ class RowLocalizationTest extends MPGR_TestCase {
 
 		$reflection = new ReflectionClass( 'MPGR_Gift_Report' );
 		$property   = $reflection->getProperty( 'instance' );
-		$property->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$property->setAccessible( true );
+		}
 		$property->setValue( null, null );
 
 		parent::tear_down();

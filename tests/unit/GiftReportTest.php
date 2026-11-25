@@ -16,7 +16,9 @@ class GiftReportTest extends MPGR_TestCase {
 	public function tear_down() {
 		$reflection = new ReflectionClass( 'MPGR_Gift_Report' );
 		$property   = $reflection->getProperty( 'instance' );
-		$property->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$property->setAccessible( true );
+		}
 		$property->setValue( null, null );
 
 		unset( $_COOKIE[ LOGGED_IN_COOKIE ] );
@@ -45,7 +47,7 @@ class GiftReportTest extends MPGR_TestCase {
 		$this->assertArrayHasKey( 'date_from', $args );
 		$this->assertArrayHasKey( 'gift_status', $args );
 		$this->assertArrayHasKey( 'product', $args );
-		$this->assertSame( 'intval', $args['product']['sanitize_callback'] );
+		$this->assertSame( 42, $args['product']['sanitize_callback']( '42', new WP_REST_Request(), 'product' ) );
 	}
 
 	/**
