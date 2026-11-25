@@ -47,7 +47,7 @@ fi
 
 rsync -a \
   --delete \
-  --exclude='.git/' \
+  --exclude='.git' \
   --exclude='.github/' \
   --exclude='.cursor/' \
   --exclude='.superpowers/' \

@@ -200,7 +200,7 @@
         $('#redemption_to').val('');
         
         // Submit the form to refresh the page
-        $('form').submit();
+        $('form').trigger('submit');
     };
 
     /**
@@ -693,7 +693,7 @@
             $('.mpgr-table').addClass('mpgr-mobile');
         }
 
-        $(window).resize(function() {
+        $(window).on('resize', function() {
             if ($(window).width() < 768) {
                 $('.mpgr-table').addClass('mpgr-mobile');
             } else {
@@ -720,7 +720,7 @@
             $btn.removeAttr('title');
             
             // Add custom tooltip on hover (only when not in loading/success state)
-            $btn.hover(
+            $btn.on('mouseenter',
                 function() {
                     // Don't show tooltip if button is in loading or success state
                     if ($(this).hasClass('mpgr-loading') || $(this).hasClass('mpgr-success')) {
@@ -746,7 +746,8 @@
                     });
                     
                     $btn.append($tooltip);
-                },
+                }
+            ).on('mouseleave',
                 function() {
                     $btn.find('.mpgr-custom-tooltip').remove();
                 }

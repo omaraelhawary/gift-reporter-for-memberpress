@@ -57,7 +57,9 @@ class RestPaginationTest extends MPGR_TestCase {
 
 		$reflection = new ReflectionClass( 'MPGR_Gift_Report' );
 		$property   = $reflection->getProperty( 'instance' );
-		$property->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$property->setAccessible( true );
+		}
 		$property->setValue( null, null );
 
 		parent::tear_down();
@@ -184,5 +186,23 @@ class RestPaginationTest extends MPGR_TestCase {
 		$this->assertArrayHasKey( 'page', $args );
 		$this->assertArrayHasKey( 'per_page', $args );
 		$this->assertSame( 100, $args['per_page']['default'] );
+	}
+
+	/**
+	 * WordPress passes three arguments to REST sanitizers, including product IDs.
+	 */
+	public function test_product_filter_through_rest_dispatch() {
+		$report = MPGR_Gift_Report::get_instance();
+		$data   = $this->request()->get_data();
+		rest_get_server();
+		$report->register_rest_routes();
+		$request = new WP_REST_Request( 'GET', '/mpgr/v1/report' );
+		$request->set_param( 'product', $data['data'][0]['product_id'] );
+
+		$response = rest_do_request( $request );
+
+		$this->assertSame( 200, $response->get_status() );
+		$this->assertSame( self::GIFT_COUNT, $response->get_data()['total'] );
+		$this->assertCount( self::GIFT_COUNT, $response->get_data()['data'] );
 	}
 }
