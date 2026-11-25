@@ -16,9 +16,9 @@ A comprehensive WordPress plugin that generates detailed reports for the MemberP
 ## Plugin Information
 
 - **Plugin page:** [WordPress.org](https://wordpress.org/plugins/memberpress-gift-reporter/)
-- **Version:** 1.9.0
-- **Requires at least:** WordPress 5.0
-- **Tested up to:** WordPress 7.0
+- **Version:** 1.9.1
+- **Requires at least:** WordPress 5.3
+- **Tested up to:** WordPress 7.2
 - **Requires PHP:** 7.4 or higher
 - **License:** GPLv2 or later
 - **Author:** Omar ElHawary

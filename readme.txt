@@ -4,7 +4,7 @@ Tags: memberpress, gifting, reports, csv export, reminders
 Requires at least: 5.3
 Requires PHP: 7.4
 Tested up to: 7.2
-Stable tag: 1.9.0
+Stable tag: 1.9.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -51,6 +51,11 @@ Use the **Reminders** tab for subject and body. To override the template, copy `
 Apply filters on the Gift Report tab, then click **Download CSV Report**. Only filtered rows are exported.
 
 == Changelog ==
+
+= 1.9.1 =
+* Verified compatibility with WordPress 7.2 and PHP 8.6.
+* Fixed membership filtering through the REST API.
+* Replaced deprecated jQuery event shorthands.
 
 = 1.9.0 =
 * Fixed: report table sort headers no longer all point at the sort already applied, so columns and direction can be changed again
